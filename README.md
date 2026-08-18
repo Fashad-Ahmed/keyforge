@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# KeyForge
 
-## Getting Started
+KeyForge is a free, open-source, privacy-first keyboard sound engine for macOS, Windows, and Linux.
 
-First, run the development server:
+This repository currently contains Milestone 1: a secure Tauri 2 desktop foundation with a statically exported Next.js presentation layer. Keyboard capture, audio playback, sound packs, autostart, updates, and networking are intentionally not implemented yet.
+
+## Architecture
+
+- Next.js and TypeScript render the interface as static files in `out/`.
+- Tauri loads those files directly; there is no production Next.js server.
+- Native functionality belongs in Rust and crosses IPC only through explicitly registered commands.
+- The only Milestone 1 custom command is `get_app_info`.
+- The main window has no built-in Tauri core permissions.
+- The application contains no telemetry, analytics, accounts, or runtime networking.
+
+See [the trust-boundary documentation](docs/architecture/trust-boundaries.md) and [threat model](docs/security/threat-model.md) before adding native functionality.
+
+## Prerequisites
+
+- Node.js 22.23.2
+- pnpm 10.33.2
+- Rust 1.88.0 with `rustfmt` and `clippy`
+- Tauri's platform prerequisites for your operating system
+
+## Development
+
+Install locked dependencies and launch the desktop application:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install --frozen-lockfile
+pnpm tauri dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The development asset server is restricted to `127.0.0.1`. Next.js telemetry is disabled by the committed project environment.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Verification
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+pnpm install --frozen-lockfile
+pnpm test
+pnpm build
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+```
 
-## Learn More
+`pnpm build` must produce `out/index.html`.
 
-To learn more about Next.js, take a look at the following resources:
+## Security
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Never expose raw keyboard events or typed content to the frontend. Never persist or transmit typed content. New dependencies, IPC commands, and Tauri permissions require explicit justification and review.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Report vulnerabilities according to [SECURITY.md](SECURITY.md).

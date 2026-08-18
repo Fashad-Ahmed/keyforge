@@ -4,5 +4,5 @@
   "description": "Minimum permissions for the KeyForge main desktop window",
   "windows": ["main"],
   "platforms": ["linux", "macOS", "windows"],
-  "permissions": ["core:default"]
+  "permissions": []
 }

@@ -5,11 +5,35 @@ import { useEffect, useState } from "react";
 import { getAppInfo } from "@/lib/native/api";
 import type { AppInfo } from "@/lib/types/app-info";
 
+type RuntimeStatus =
+  | { state: "connecting" }
+  | { state: "ready"; info: AppInfo }
+  | { state: "unavailable" };
+
 export function AppShell() {
-  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeStatus>({
+    state: "connecting",
+  });
 
   useEffect(() => {
-    void getAppInfo().then(setInfo);
+    let isMounted = true;
+
+    void getAppInfo().then(
+      (info) => {
+        if (isMounted) {
+          setRuntime({ state: "ready", info });
+        }
+      },
+      () => {
+        if (isMounted) {
+          setRuntime({ state: "unavailable" });
+        }
+      },
+    );
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   return (
@@ -21,11 +45,13 @@ export function AppShell() {
 
       <section className="mt-8 rounded-xl border p-4">
         <h2 className="font-medium">Native runtime</h2>
-        {info ? (
+        {runtime.state === "ready" ? (
           <dl className="mt-3 space-y-1 text-sm">
-            <div>Version: {info.version}</div>
-            <div>Platform: {info.platform}</div>
+            <div>Version: {runtime.info.version}</div>
+            <div>Platform: {runtime.info.platform}</div>
           </dl>
+        ) : runtime.state === "unavailable" ? (
+          <p className="mt-3 text-sm">Native runtime unavailable</p>
         ) : (
           <p className="mt-3 text-sm">Connecting…</p>
         )}

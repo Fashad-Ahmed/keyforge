@@ -2,10 +2,10 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "KeyForge",
   "version": "0.1.0",
-  "identifier": "org.keyforge.app",
+  "identifier": "org.keyforge.desktop",
   "build": {
     "frontendDist": "../out",
-    "devUrl": "http://localhost:3000",
+    "devUrl": "http://127.0.0.1:3000",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build"
   },
@@ -21,7 +21,19 @@
     ],
     "security": {
       "capabilities": ["main"],
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "img-src": "'self' data:",
+        "style-src": "'self'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost ws://127.0.0.1:3000",
+        "img-src": "'self' data:",
+        "script-src": "'self' 'unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'"
+      }
     }
   },
   "bundle": {
