@@ -61,7 +61,7 @@ impl<B: OutputBackend> OutputSupervisor<B> {
             return SupervisorStep::Stop;
         }
 
-        if self.shared.stream_failed.swap(false, Ordering::AcqRel) {
+        if self.shared.stream_failed.swap(false, Ordering::AcqRel) && self.stream.is_some() {
             self.stream = None;
             self.device_token = None;
             self.shared.clear_commands();
@@ -84,6 +84,7 @@ impl<B: OutputBackend> OutputSupervisor<B> {
         }
 
         if self.stream.is_none() && self.recovery.attempt_due(now) {
+            self.shared.clear_commands();
             match self
                 .backend
                 .open_default_stream(Arc::clone(&self.shared), current_thread)
@@ -126,6 +127,7 @@ mod tests {
     #[derive(Default)]
     struct FakeBackend {
         opens: VecDeque<Result<(FakeStream, u64), BackendFailure>>,
+        default_outcomes: VecDeque<Result<Option<u64>, BackendFailure>>,
         default_id: Option<u64>,
         open_count: usize,
     }
@@ -137,7 +139,9 @@ mod tests {
         type DeviceToken = u64;
 
         fn default_device_token(&mut self) -> Result<Option<Self::DeviceToken>, BackendFailure> {
-            Ok(self.default_id)
+            self.default_outcomes
+                .pop_front()
+                .unwrap_or(Ok(self.default_id))
         }
 
         fn open_default_stream(
@@ -191,6 +195,53 @@ mod tests {
     }
 
     #[test]
+    fn late_stream_failure_during_backoff_preserves_retry_deadline() {
+        let shared = Arc::new(SharedState::new());
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Err(BackendFailure));
+        backend.opens.push_back(Err(BackendFailure));
+        let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
+
+        supervisor.step(Duration::ZERO, std::thread::current());
+        shared.stream_failed.store(true, Ordering::Release);
+        supervisor.step(Duration::from_millis(50), std::thread::current());
+
+        assert_eq!(supervisor.backend.open_count, 1);
+        assert_eq!(
+            supervisor.wait_duration(Duration::from_millis(50)),
+            Duration::from_millis(50)
+        );
+        assert_eq!(shared.status(), AudioEngineStatus::Starting);
+    }
+
+    #[test]
+    fn commands_queued_during_recovery_are_cleared_before_successful_reopen() {
+        let shared = Arc::new(SharedState::new());
+        let handle = AudioEngineHandle {
+            shared: shared.clone(),
+        };
+        let id = handle
+            .register_sample(PcmSample::new(48_000, 1, vec![0.0]).unwrap())
+            .unwrap();
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.opens.push_back(Err(BackendFailure));
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.default_id = Some(1);
+        let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
+
+        supervisor.step(Duration::ZERO, std::thread::current());
+        shared.stream_failed.store(true, Ordering::Release);
+        supervisor.step(Duration::from_millis(1), std::thread::current());
+        handle.play(id).unwrap();
+        assert_eq!(shared.commands.len(), 1);
+        supervisor.step(Duration::from_millis(101), std::thread::current());
+
+        assert!(shared.commands.is_empty());
+        assert_eq!(shared.status(), AudioEngineStatus::Ready);
+    }
+
+    #[test]
     fn changed_default_device_rebuilds_after_two_second_poll() {
         let shared = Arc::new(SharedState::new());
         let mut backend = FakeBackend::default();
@@ -221,5 +272,64 @@ mod tests {
         );
         assert_eq!(shared.status(), AudioEngineStatus::Stopped);
         assert!(supervisor.stream.is_none());
+    }
+
+    #[test]
+    fn wait_duration_uses_retry_deadline() {
+        let shared = Arc::new(SharedState::new());
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Err(BackendFailure));
+        let mut supervisor = OutputSupervisor::new(backend, shared, Duration::ZERO);
+
+        supervisor.step(Duration::ZERO, std::thread::current());
+
+        assert_eq!(
+            supervisor.wait_duration(Duration::ZERO),
+            Duration::from_millis(100)
+        );
+    }
+
+    #[test]
+    fn wait_duration_returns_zero_when_retry_is_already_due() {
+        let supervisor = OutputSupervisor::new(
+            FakeBackend::default(),
+            Arc::new(SharedState::new()),
+            Duration::ZERO,
+        );
+
+        assert_eq!(supervisor.wait_duration(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn wait_duration_uses_ready_device_deadline_and_cap() {
+        let shared = Arc::new(SharedState::new());
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        let now = Duration::from_secs(10);
+        let mut supervisor = OutputSupervisor::new(backend, shared, now);
+
+        supervisor.step(now, std::thread::current());
+
+        assert_eq!(supervisor.wait_duration(now), Duration::from_secs(2));
+        assert_eq!(
+            supervisor.wait_duration(now + Duration::from_secs(1)),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn default_token_query_error_retains_live_stream_and_ready_status() {
+        let shared = Arc::new(SharedState::new());
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.default_outcomes.push_back(Err(BackendFailure));
+        let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
+
+        supervisor.step(Duration::ZERO, std::thread::current());
+        supervisor.step(Duration::from_secs(2), std::thread::current());
+
+        assert!(supervisor.stream.is_some());
+        assert_eq!(supervisor.backend.open_count, 1);
+        assert_eq!(shared.status(), AudioEngineStatus::Ready);
     }
 }
