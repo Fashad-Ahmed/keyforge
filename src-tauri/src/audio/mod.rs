@@ -26,6 +26,9 @@ pub use sample::{ChannelCount, PcmSample, PcmSampleError, RegisterSampleError, S
 
 pub const COMMAND_QUEUE_CAPACITY: usize = 256;
 
+#[cfg(test)]
+const TEST_STREAM_GENERATION: u64 = 7;
+
 #[derive(Debug)]
 pub enum AudioEngineStartError {
     Thread(std::io::Error),
@@ -115,6 +118,7 @@ impl std::error::Error for VolumeError {}
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct AudioCommand {
+    stream_generation: u64,
     sample_id: SampleId,
     sample: Arc<PcmSample>,
 }
@@ -122,8 +126,20 @@ pub(crate) struct AudioCommand {
 #[allow(dead_code)]
 impl AudioCommand {
     #[cfg(test)]
-    pub(crate) fn new_for_test(sample_id: SampleId, sample: Arc<PcmSample>) -> Self {
-        Self { sample_id, sample }
+    pub(crate) fn new_for_test(
+        stream_generation: u64,
+        sample_id: SampleId,
+        sample: Arc<PcmSample>,
+    ) -> Self {
+        Self {
+            stream_generation,
+            sample_id,
+            sample,
+        }
+    }
+
+    pub(crate) fn stream_generation(&self) -> u64 {
+        self.stream_generation
     }
 
     pub(crate) fn sample_id(&self) -> SampleId {
@@ -142,6 +158,7 @@ pub(crate) struct SharedState {
     master_volume: AtomicU32,
     status: AtomicU8,
     shutdown: AtomicBool,
+    active_stream_generation: AtomicU64,
     stream_failure_generation: AtomicU64,
 }
 
@@ -154,6 +171,7 @@ impl SharedState {
             master_volume: AtomicU32::new(1.0_f32.to_bits()),
             status: AtomicU8::new(AudioEngineStatus::Starting as u8),
             shutdown: AtomicBool::new(false),
+            active_stream_generation: AtomicU64::new(0),
             stream_failure_generation: AtomicU64::new(0),
         }
     }
@@ -164,6 +182,16 @@ impl SharedState {
 
     pub(crate) fn status(&self) -> AudioEngineStatus {
         AudioEngineStatus::from_u8(self.status.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn activate_stream_generation(&self, generation: u64) {
+        debug_assert_ne!(generation, 0);
+        self.active_stream_generation
+            .store(generation, Ordering::Release);
+    }
+
+    pub(crate) fn deactivate_stream_generation(&self) {
+        self.active_stream_generation.store(0, Ordering::Release);
     }
 
     pub(crate) fn clear_commands(&self) {
@@ -247,9 +275,9 @@ impl Drop for AudioEngine {
 impl AudioEngineHandle {
     #[cfg(test)]
     fn new_for_test() -> Self {
-        Self {
-            shared: Arc::new(SharedState::new()),
-        }
+        let shared = Arc::new(SharedState::new());
+        shared.activate_stream_generation(TEST_STREAM_GENERATION);
+        Self { shared }
     }
 
     pub fn register_sample(&self, sample: PcmSample) -> Result<SampleId, RegisterSampleError> {
@@ -274,9 +302,14 @@ impl AudioEngineHandle {
             .map_err(|_| PlayError::RegistryUnavailable)?
             .get(sample_id)
             .ok_or(PlayError::UnknownSample)?;
+        let stream_generation = self.shared.active_stream_generation.load(Ordering::Acquire);
         self.shared
             .commands
-            .push(AudioCommand { sample_id, sample })
+            .push(AudioCommand {
+                stream_generation,
+                sample_id,
+                sample,
+            })
             .map_err(|_| PlayError::QueueFull)
     }
 
@@ -350,6 +383,24 @@ mod tests {
         handle.play(id).unwrap();
         let command = handle.shared.commands.pop().unwrap();
         assert_eq!(command.sample_id(), id);
+        assert_eq!(command.stream_generation(), TEST_STREAM_GENERATION);
+    }
+
+    #[test]
+    fn play_tags_commands_with_the_current_stream_generation() {
+        let handle = handle();
+        handle
+            .shared
+            .active_stream_generation
+            .store(19, Ordering::Release);
+        let id = handle.register_sample(sample(0.25)).unwrap();
+
+        handle.play(id).unwrap();
+
+        assert_eq!(
+            handle.shared.commands.pop().unwrap().stream_generation(),
+            19
+        );
     }
 
     #[test]
@@ -436,6 +487,7 @@ mod tests {
             shared
                 .commands
                 .push(AudioCommand::new_for_test(
+                    TEST_STREAM_GENERATION,
                     SampleId::from_raw_for_test(id as u64),
                     Arc::clone(&retained),
                 ))

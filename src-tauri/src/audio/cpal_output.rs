@@ -116,6 +116,7 @@ where
                     output_rate,
                     output_channels,
                     &callback_shared.commands,
+                    &callback_shared.active_stream_generation,
                     &callback_shared.master_volume,
                 );
             },
@@ -279,6 +280,7 @@ impl<B: OutputBackend> OutputSupervisor<B> {
 
     pub(crate) fn step(&mut self, now: Duration, current_thread: Thread) -> SupervisorStep {
         if self.shared.shutdown.load(Ordering::Acquire) {
+            self.shared.deactivate_stream_generation();
             self.stream = None;
             self.stream_generation = None;
             self.device_token = None;
@@ -295,11 +297,13 @@ impl<B: OutputBackend> OutputSupervisor<B> {
         )
         .map(StreamGeneration);
         if self.stream.is_some() && failed_generation == self.stream_generation {
+            self.shared.deactivate_stream_generation();
+            self.recovery.stream_lost(now);
+            self.shared.set_status(self.recovery.status());
             self.stream = None;
             self.stream_generation = None;
             self.device_token = None;
             self.shared.clear_commands();
-            self.recovery.stream_lost(now);
         }
 
         if self.stream.is_some() && now >= self.next_device_check {
@@ -309,25 +313,30 @@ impl<B: OutputBackend> OutputSupervisor<B> {
                 Err(BackendFailure) => false,
             };
             if device_changed {
+                self.shared.deactivate_stream_generation();
+                self.recovery.stream_lost(now);
+                self.shared.set_status(self.recovery.status());
                 self.stream = None;
                 self.stream_generation = None;
                 self.device_token = None;
                 self.shared.clear_commands();
-                self.recovery.stream_lost(now);
             }
             self.next_device_check = now.saturating_add(DEVICE_CHECK_INTERVAL);
         }
 
         if self.stream.is_none() && self.recovery.attempt_due(now) {
+            self.shared.set_status(self.recovery.status());
             self.shared.clear_commands();
             match self
                 .backend
                 .open_default_stream(Arc::clone(&self.shared), current_thread)
             {
                 Ok((stream, token, generation)) => {
+                    self.shared.clear_commands();
                     self.stream = Some(stream);
                     self.stream_generation = Some(generation);
                     self.device_token = Some(token);
+                    self.shared.activate_stream_generation(generation.get());
                     self.recovery.opened();
                     self.next_device_check = now.saturating_add(DEVICE_CHECK_INTERVAL);
                 }
@@ -368,12 +377,18 @@ where
 mod tests {
     use std::{
         collections::VecDeque,
-        sync::{atomic::Ordering, Arc},
+        sync::{
+            atomic::{AtomicU32, Ordering},
+            mpsc::{sync_channel, Receiver, SyncSender},
+            Arc,
+        },
         time::Duration,
     };
 
     use super::*;
-    use crate::audio::{AudioEngineHandle, AudioEngineStatus, PcmSample, SharedState};
+    use crate::audio::{
+        mixer::MixerCore, AudioEngineHandle, AudioEngineStatus, PcmSample, SampleId, SharedState,
+    };
 
     #[test]
     fn selects_stereo_f32_at_a_standard_rate() {
@@ -510,6 +525,7 @@ mod tests {
         opens: VecDeque<Result<(FakeStream, u64), BackendFailure>>,
         default_outcomes: VecDeque<Result<Option<u64>, BackendFailure>>,
         default_id: Option<u64>,
+        inject_sample_on_open: Option<SampleId>,
         open_count: usize,
         generations: StreamGenerationCounter,
     }
@@ -528,11 +544,14 @@ mod tests {
 
         fn open_default_stream(
             &mut self,
-            _shared: Arc<SharedState>,
+            shared: Arc<SharedState>,
             _supervisor: std::thread::Thread,
         ) -> Result<(Self::Stream, Self::DeviceToken, StreamGeneration), BackendFailure> {
             self.open_count += 1;
             let generation = self.generations.next()?;
+            if let Some(sample_id) = self.inject_sample_on_open.take() {
+                AudioEngineHandle { shared }.play(sample_id).unwrap();
+            }
             self.opens
                 .pop_front()
                 .unwrap_or(Err(BackendFailure))
@@ -665,6 +684,99 @@ mod tests {
     }
 
     #[test]
+    fn command_injected_during_reopen_is_not_rendered_after_ready() {
+        let shared = Arc::new(SharedState::new());
+        let handle = AudioEngineHandle {
+            shared: shared.clone(),
+        };
+        let id = handle
+            .register_sample(PcmSample::new(48_000, 1, vec![0.5]).unwrap())
+            .unwrap();
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.default_id = Some(1);
+        let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
+
+        supervisor.step(Duration::ZERO, std::thread::current());
+        supervisor.backend.inject_sample_on_open = Some(id);
+        report_stream_failure(&shared, supervisor.stream_generation.unwrap());
+        supervisor.step(Duration::from_millis(1), std::thread::current());
+
+        assert_eq!(shared.status(), AudioEngineStatus::Ready);
+        assert!(shared.commands.is_empty());
+        let mut output = [0.0_f32; 1];
+        MixerCore::new(1.0).render(
+            &mut output,
+            48_000,
+            1,
+            &shared.commands,
+            &shared.active_stream_generation,
+            &AtomicU32::new(1.0_f32.to_bits()),
+        );
+        assert_eq!(output, [0.0]);
+    }
+
+    struct BlockingReopenBackend {
+        open_count: usize,
+        entered: SyncSender<()>,
+        release: Receiver<()>,
+        generations: StreamGenerationCounter,
+    }
+
+    impl OutputBackend for BlockingReopenBackend {
+        type Stream = FakeStream;
+        type DeviceToken = u64;
+
+        fn default_device_token(&mut self) -> Result<Option<Self::DeviceToken>, BackendFailure> {
+            Ok(Some(1))
+        }
+
+        fn open_default_stream(
+            &mut self,
+            _shared: Arc<SharedState>,
+            _supervisor: std::thread::Thread,
+        ) -> Result<(Self::Stream, Self::DeviceToken, StreamGeneration), BackendFailure> {
+            self.open_count += 1;
+            let generation = self.generations.next()?;
+            if self.open_count == 2 {
+                self.entered.send(()).unwrap();
+                self.release.recv().unwrap();
+            }
+            Ok((FakeStream, 1, generation))
+        }
+    }
+
+    #[test]
+    fn publishes_recovering_while_reopen_is_in_progress() {
+        let shared = Arc::new(SharedState::new());
+        let (entered_sender, entered_receiver) = sync_channel(0);
+        let (release_sender, release_receiver) = sync_channel(0);
+        let backend = BlockingReopenBackend {
+            open_count: 0,
+            entered: entered_sender,
+            release: release_receiver,
+            generations: StreamGenerationCounter::new(),
+        };
+        let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
+        supervisor.step(Duration::ZERO, std::thread::current());
+        report_stream_failure(&shared, supervisor.stream_generation.unwrap());
+
+        let join = std::thread::spawn(move || {
+            supervisor.step(Duration::from_millis(1), std::thread::current())
+        });
+        entered_receiver.recv().unwrap();
+        let status_during_reopen = shared.status();
+        let generation_during_reopen = shared.active_stream_generation.load(Ordering::Acquire);
+        release_sender.send(()).unwrap();
+        assert_eq!(join.join().unwrap(), SupervisorStep::Continue);
+
+        assert_eq!(status_during_reopen, AudioEngineStatus::Recovering);
+        assert_eq!(generation_during_reopen, 0);
+        assert_ne!(shared.active_stream_generation.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
     fn changed_default_device_rebuilds_after_two_second_poll() {
         let shared = Arc::new(SharedState::new());
         let mut backend = FakeBackend::default();
@@ -681,7 +793,26 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_drops_stream_and_is_terminal() {
+    fn changed_default_device_deactivates_generation_when_reopen_fails() {
+        let shared = Arc::new(SharedState::new());
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.opens.push_back(Err(BackendFailure));
+        backend.default_id = Some(1);
+        let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
+        supervisor.step(Duration::ZERO, std::thread::current());
+        assert_ne!(shared.active_stream_generation.load(Ordering::Acquire), 0);
+
+        supervisor.backend.default_id = Some(2);
+        supervisor.step(Duration::from_secs(2), std::thread::current());
+
+        assert!(supervisor.stream.is_none());
+        assert_eq!(shared.status(), AudioEngineStatus::Recovering);
+        assert_eq!(shared.active_stream_generation.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn shutdown_deactivates_generation_and_is_terminal() {
         let shared = Arc::new(SharedState::new());
         let mut backend = FakeBackend::default();
         backend.opens.push_back(Ok((FakeStream, 1)));
@@ -695,6 +826,7 @@ mod tests {
         );
         assert_eq!(shared.status(), AudioEngineStatus::Stopped);
         assert!(supervisor.stream.is_none());
+        assert_eq!(shared.active_stream_generation.load(Ordering::Acquire), 0);
     }
 
     #[test]

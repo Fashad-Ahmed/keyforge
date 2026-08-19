@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicU32, AtomicU64, Ordering},
     Arc,
 };
 
@@ -72,6 +72,7 @@ impl MixerCore {
         output_rate: u32,
         output_channels: u16,
         commands: &ArrayQueue<AudioCommand>,
+        active_stream_generation: &AtomicU64,
         master_volume: &AtomicU32,
     ) where
         T: SizedSample + FromSample<f32>,
@@ -88,7 +89,10 @@ impl MixerCore {
             let Some(command) = commands.pop() else {
                 break;
             };
-            self.start_voice(command);
+            let active_generation = active_stream_generation.load(Ordering::Acquire);
+            if active_generation != 0 && command.stream_generation() == active_generation {
+                self.start_voice(command);
+            }
         }
 
         let output_channels = usize::from(output_channels);
@@ -189,14 +193,23 @@ mod tests {
     use super::*;
     use crate::audio::{AudioCommand, PcmSampleError, SampleId, COMMAND_QUEUE_CAPACITY};
     use crossbeam_queue::ArrayQueue;
-    use std::sync::{atomic::AtomicU32, Arc};
+    use std::sync::{
+        atomic::{AtomicU32, AtomicU64},
+        Arc,
+    };
+
+    const TEST_STREAM_GENERATION: u64 = 7;
 
     fn pcm(rate: u32, channels: u16, values: &[f32]) -> Arc<PcmSample> {
         Arc::new(PcmSample::new(rate, channels, values.to_vec()).unwrap())
     }
 
     fn command(id: u64, sample: Arc<PcmSample>) -> AudioCommand {
-        AudioCommand::new_for_test(SampleId::from_raw_for_test(id), sample)
+        AudioCommand::new_for_test(
+            TEST_STREAM_GENERATION,
+            SampleId::from_raw_for_test(id),
+            sample,
+        )
     }
 
     #[test]
@@ -212,6 +225,7 @@ mod tests {
             48_000,
             2,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         assert_eq!(stereo, [0.25, 0.25, 0.5, 0.5]);
@@ -223,6 +237,7 @@ mod tests {
             48_000,
             1,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         assert!((mono[0] - 0.4).abs() < 0.000_01);
@@ -238,6 +253,7 @@ mod tests {
             48_000,
             1,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         assert_eq!(output, [0.0, 0.5, 1.0, 1.0]);
@@ -251,6 +267,7 @@ mod tests {
             24_000,
             1,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         assert_eq!(downsampled, [0.0, 0.5]);
@@ -266,6 +283,7 @@ mod tests {
             48_000,
             4,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         assert_eq!(output, [0.25, 0.25, 0.0, 0.0, 0.0]);
@@ -276,6 +294,7 @@ mod tests {
             48_000,
             2,
             &ArrayQueue::new(1),
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         assert_eq!(silence, [0.0, 0.0]);
@@ -294,6 +313,7 @@ mod tests {
             48_000,
             1,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         let ids = mixer.active_sample_ids_for_test();
@@ -315,6 +335,7 @@ mod tests {
             48_000,
             1,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
         assert_eq!(output, [1.0]);
@@ -331,7 +352,14 @@ mod tests {
         queue.push(command(1, pcm(8_000, 1, &[1.0; 40]))).unwrap();
         let volume = AtomicU32::new(0.0_f32.to_bits());
         let mut output = [0.0_f32; 40];
-        MixerCore::new(1.0).render(&mut output, 8_000, 1, &queue, &volume);
+        MixerCore::new(1.0).render(
+            &mut output,
+            8_000,
+            1,
+            &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
+            &volume,
+        );
         assert!((output[0] - 0.975).abs() < 0.000_01);
         assert_eq!(output[39], 0.0);
     }
@@ -345,7 +373,14 @@ mod tests {
         let mut mixer = MixerCore::new(1.0);
         let mut output = [0.0_f32; 64];
         let allocations = crate::test_alloc::allocations_during(|| {
-            mixer.render(&mut output, 48_000, 1, &queue, &volume);
+            mixer.render(
+                &mut output,
+                48_000,
+                1,
+                &queue,
+                &AtomicU64::new(TEST_STREAM_GENERATION),
+                &volume,
+            );
         });
         assert_eq!(allocations, 0);
         assert_eq!(Arc::strong_count(&retained), 1);
@@ -368,9 +403,49 @@ mod tests {
             48_000,
             1,
             &queue,
+            &AtomicU64::new(TEST_STREAM_GENERATION),
             &AtomicU32::new(1.0_f32.to_bits()),
         );
 
         assert_eq!(queue.len(), remaining);
+    }
+
+    fn render_generation(command_generation: u64, active_generation: u64) -> f32 {
+        let queue = ArrayQueue::new(1);
+        queue
+            .push(AudioCommand::new_for_test(
+                command_generation,
+                SampleId::from_raw_for_test(1),
+                pcm(48_000, 1, &[0.25]),
+            ))
+            .unwrap();
+        let mut output = [0.0_f32; 1];
+        MixerCore::new(1.0).render(
+            &mut output,
+            48_000,
+            1,
+            &queue,
+            &AtomicU64::new(active_generation),
+            &AtomicU32::new(1.0_f32.to_bits()),
+        );
+        output[0]
+    }
+
+    #[test]
+    fn discards_commands_when_no_stream_generation_is_active() {
+        assert_eq!(render_generation(TEST_STREAM_GENERATION, 0), 0.0);
+    }
+
+    #[test]
+    fn discards_commands_from_a_different_stream_generation() {
+        assert_eq!(render_generation(TEST_STREAM_GENERATION, 8), 0.0);
+    }
+
+    #[test]
+    fn renders_commands_for_the_active_stream_generation() {
+        assert_eq!(
+            render_generation(TEST_STREAM_GENERATION, TEST_STREAM_GENERATION),
+            0.25
+        );
     }
 }
