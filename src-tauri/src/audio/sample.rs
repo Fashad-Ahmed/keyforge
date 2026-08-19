@@ -111,6 +111,13 @@ pub const MAX_REGISTERED_BYTES: usize = 128 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SampleId(u64);
 
+impl SampleId {
+    #[cfg(test)]
+    pub(crate) fn from_raw_for_test(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RegistryLimits {
     pub max_samples: usize,
