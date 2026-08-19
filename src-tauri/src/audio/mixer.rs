@@ -6,7 +6,7 @@ use std::sync::{
 use cpal::{FromSample, SizedSample};
 use crossbeam_queue::ArrayQueue;
 
-use super::{AudioCommand, PcmSample, SampleId};
+use super::{AudioCommand, PcmSample, SampleId, COMMAND_QUEUE_CAPACITY};
 
 pub const MAX_VOICES: usize = 32;
 
@@ -84,7 +84,10 @@ impl MixerCore {
             self.volume_step = (self.target_volume - self.current_volume) / ramp_frames as f32;
         }
 
-        while let Some(command) = commands.pop() {
+        for _ in 0..COMMAND_QUEUE_CAPACITY {
+            let Some(command) = commands.pop() else {
+                break;
+            };
             self.start_voice(command);
         }
 
@@ -184,7 +187,7 @@ fn apply_volume(value: f32, volume: f32) -> f32 {
 #[allow(unused_imports)]
 mod tests {
     use super::*;
-    use crate::audio::{AudioCommand, PcmSampleError, SampleId};
+    use crate::audio::{AudioCommand, PcmSampleError, SampleId, COMMAND_QUEUE_CAPACITY};
     use crossbeam_queue::ArrayQueue;
     use std::sync::{atomic::AtomicU32, Arc};
 
@@ -346,5 +349,28 @@ mod tests {
         });
         assert_eq!(allocations, 0);
         assert_eq!(Arc::strong_count(&retained), 1);
+    }
+
+    #[test]
+    fn rendering_drains_at_most_one_command_queue_capacity() {
+        let remaining = 44;
+        let queue = ArrayQueue::new(COMMAND_QUEUE_CAPACITY + remaining);
+        let retained = pcm(48_000, 1, &[0.01; 8]);
+        for id in 1..=(COMMAND_QUEUE_CAPACITY + remaining) {
+            queue
+                .push(command(id as u64, Arc::clone(&retained)))
+                .unwrap();
+        }
+        let mut output = [0.0_f32; 1];
+
+        MixerCore::new(1.0).render(
+            &mut output,
+            48_000,
+            1,
+            &queue,
+            &AtomicU32::new(1.0_f32.to_bits()),
+        );
+
+        assert_eq!(queue.len(), remaining);
     }
 }

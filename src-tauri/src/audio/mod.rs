@@ -167,7 +167,11 @@ impl SharedState {
     }
 
     pub(crate) fn clear_commands(&self) {
-        while self.commands.pop().is_some() {}
+        for _ in 0..COMMAND_QUEUE_CAPACITY {
+            if self.commands.pop().is_none() {
+                break;
+            }
+        }
     }
 }
 
@@ -420,5 +424,26 @@ mod tests {
 
         assert_eq!(handle.status(), AudioEngineStatus::Stopped);
         assert_eq!(handle.play(id), Err(PlayError::Stopped));
+    }
+
+    #[test]
+    fn clearing_commands_drains_at_most_one_command_queue_capacity() {
+        let remaining = 44;
+        let mut shared = SharedState::new();
+        shared.commands = ArrayQueue::new(COMMAND_QUEUE_CAPACITY + remaining);
+        let retained = Arc::new(sample(0.0));
+        for id in 1..=(COMMAND_QUEUE_CAPACITY + remaining) {
+            shared
+                .commands
+                .push(AudioCommand::new_for_test(
+                    SampleId::from_raw_for_test(id as u64),
+                    Arc::clone(&retained),
+                ))
+                .unwrap();
+        }
+
+        shared.clear_commands();
+
+        assert_eq!(shared.commands.len(), remaining);
     }
 }
