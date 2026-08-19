@@ -26,6 +26,40 @@ pub use sample::{ChannelCount, PcmSample, PcmSampleError, RegisterSampleError, S
 
 pub const COMMAND_QUEUE_CAPACITY: usize = 256;
 
+#[derive(Debug)]
+pub enum AudioEngineStartError {
+    Thread(std::io::Error),
+}
+
+impl fmt::Display for AudioEngineStartError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Thread(_) => formatter.write_str("failed to start audio supervisor thread"),
+        }
+    }
+}
+
+impl std::error::Error for AudioEngineStartError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Thread(error) => Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioEngineShutdownError {
+    SupervisorPanicked,
+}
+
+impl fmt::Display for AudioEngineShutdownError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("audio supervisor thread panicked")
+    }
+}
+
+impl std::error::Error for AudioEngineShutdownError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AudioEngineStatus {
@@ -142,6 +176,70 @@ pub struct AudioEngineHandle {
     shared: Arc<SharedState>,
 }
 
+pub struct AudioEngine {
+    handle: AudioEngineHandle,
+    supervisor: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AudioEngine {
+    pub fn start() -> Result<Self, AudioEngineStartError> {
+        Self::start_with_backend(cpal_output::CpalBackend::new())
+    }
+
+    pub fn handle(&self) -> AudioEngineHandle {
+        self.handle.clone()
+    }
+
+    pub fn shutdown(mut self) -> Result<(), AudioEngineShutdownError> {
+        self.stop_and_join()
+    }
+
+    fn start_with_backend<B>(backend: B) -> Result<Self, AudioEngineStartError>
+    where
+        B: cpal_output::OutputBackend + Send + 'static,
+        B::Stream: Send + 'static,
+        B::DeviceToken: Send + 'static,
+    {
+        let shared = Arc::new(SharedState::new());
+        let thread_shared = shared.clone();
+        let supervisor = std::thread::Builder::new()
+            .name("keyforge-audio".into())
+            .spawn(move || cpal_output::run_supervisor(backend, thread_shared))
+            .map_err(AudioEngineStartError::Thread)?;
+        Ok(Self {
+            handle: AudioEngineHandle { shared },
+            supervisor: Some(supervisor),
+        })
+    }
+
+    #[cfg(test)]
+    fn start_with_backend_for_test<B>(backend: B) -> Result<Self, AudioEngineStartError>
+    where
+        B: cpal_output::OutputBackend + Send + 'static,
+        B::Stream: Send + 'static,
+        B::DeviceToken: Send + 'static,
+    {
+        Self::start_with_backend(backend)
+    }
+
+    fn stop_and_join(&mut self) -> Result<(), AudioEngineShutdownError> {
+        self.handle.shared.shutdown.store(true, Ordering::Release);
+        if let Some(supervisor) = self.supervisor.take() {
+            supervisor.thread().unpark();
+            supervisor
+                .join()
+                .map_err(|_| AudioEngineShutdownError::SupervisorPanicked)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        let _ = self.stop_and_join();
+    }
+}
+
 impl AudioEngineHandle {
     #[cfg(test)]
     fn new_for_test() -> Self {
@@ -204,6 +302,27 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    struct NoDeviceBackend;
+
+    impl cpal_output::OutputBackend for NoDeviceBackend {
+        type Stream = ();
+        type DeviceToken = u64;
+
+        fn default_device_token(
+            &mut self,
+        ) -> Result<Option<Self::DeviceToken>, cpal_output::BackendFailure> {
+            Ok(None)
+        }
+
+        fn open_default_stream(
+            &mut self,
+            _shared: Arc<SharedState>,
+            _supervisor: std::thread::Thread,
+        ) -> Result<(Self::Stream, Self::DeviceToken), cpal_output::BackendFailure> {
+            Err(cpal_output::BackendFailure)
+        }
+    }
 
     fn handle() -> AudioEngineHandle {
         AudioEngineHandle::new_for_test()
@@ -282,5 +401,17 @@ mod tests {
         handle.shared.shutdown.store(true, Ordering::Release);
         assert_eq!(handle.play(id), Err(PlayError::Stopped));
         assert_eq!(handle.status(), AudioEngineStatus::Stopped);
+    }
+
+    #[test]
+    fn engine_shutdown_stops_all_cloned_handles() {
+        let engine = AudioEngine::start_with_backend_for_test(NoDeviceBackend).unwrap();
+        let handle = engine.handle();
+        let id = handle.register_sample(sample(0.0)).unwrap();
+
+        engine.shutdown().unwrap();
+
+        assert_eq!(handle.status(), AudioEngineStatus::Stopped);
+        assert_eq!(handle.play(id), Err(PlayError::Stopped));
     }
 }

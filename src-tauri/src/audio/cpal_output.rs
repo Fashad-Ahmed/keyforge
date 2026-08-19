@@ -1,16 +1,119 @@
 use std::{
     fmt::Debug,
     sync::{atomic::Ordering, Arc},
-    thread::Thread,
-    time::Duration,
+    thread::{self, Thread},
+    time::{Duration, Instant},
 };
 
-use super::{recovery::RecoveryController, SharedState};
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    BufferSize, DeviceId, FromSample, SampleFormat, SizedSample, StreamConfig,
+    SupportedStreamConfig, SupportedStreamConfigRange,
+};
+
+use super::{mixer::MixerCore, recovery::RecoveryController, SharedState};
 
 const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BackendFailure;
+
+pub(crate) struct CpalBackend {
+    host: cpal::Host,
+}
+
+impl CpalBackend {
+    pub(crate) fn new() -> Self {
+        Self {
+            host: cpal::default_host(),
+        }
+    }
+}
+
+fn select_supported_config(
+    ranges: impl IntoIterator<Item = SupportedStreamConfigRange>,
+) -> Option<SupportedStreamConfig> {
+    let range = ranges
+        .into_iter()
+        .max_by(SupportedStreamConfigRange::cmp_default_heuristics)?;
+    range
+        .try_with_standard_sample_rate()
+        .or_else(|| Some(range.with_max_sample_rate()))
+}
+
+fn buffer_preferences() -> [BufferSize; 3] {
+    [
+        BufferSize::Fixed(128),
+        BufferSize::Fixed(256),
+        BufferSize::Default,
+    ]
+}
+
+fn build_typed_stream<T>(
+    device: &cpal::Device,
+    config: StreamConfig,
+    shared: Arc<SharedState>,
+    supervisor: Thread,
+) -> Result<cpal::Stream, BackendFailure>
+where
+    T: SizedSample + FromSample<f32>,
+{
+    let output_rate = config.sample_rate;
+    let output_channels = config.channels;
+    let initial_volume = f32::from_bits(shared.master_volume.load(Ordering::Acquire));
+    let callback_shared = shared.clone();
+    let error_shared = shared;
+    let mut mixer = MixerCore::new(initial_volume);
+    device
+        .build_output_stream::<T, _, _>(
+            config,
+            move |output, _| {
+                mixer.render(
+                    output,
+                    output_rate,
+                    output_channels,
+                    &callback_shared.commands,
+                    &callback_shared.master_volume,
+                );
+            },
+            move |_| {
+                error_shared.stream_failed.store(true, Ordering::Release);
+                supervisor.unpark();
+            },
+            Some(Duration::from_secs(2)),
+        )
+        .map_err(|_| BackendFailure)
+}
+
+fn build_stream_for_format(
+    device: &cpal::Device,
+    sample_format: SampleFormat,
+    config: StreamConfig,
+    shared: Arc<SharedState>,
+    supervisor: Thread,
+) -> Result<cpal::Stream, BackendFailure> {
+    macro_rules! build {
+        ($sample:ty) => {
+            build_typed_stream::<$sample>(device, config, shared, supervisor)
+        };
+    }
+
+    match sample_format {
+        SampleFormat::I8 => build!(i8),
+        SampleFormat::I16 => build!(i16),
+        SampleFormat::I24 => build!(cpal::I24),
+        SampleFormat::I32 => build!(i32),
+        SampleFormat::I64 => build!(i64),
+        SampleFormat::U8 => build!(u8),
+        SampleFormat::U16 => build!(u16),
+        SampleFormat::U24 => build!(cpal::U24),
+        SampleFormat::U32 => build!(u32),
+        SampleFormat::U64 => build!(u64),
+        SampleFormat::F32 => build!(f32),
+        SampleFormat::F64 => build!(f64),
+        _ => Err(BackendFailure),
+    }
+}
 
 pub(crate) trait OutputBackend {
     type Stream;
@@ -22,6 +125,51 @@ pub(crate) trait OutputBackend {
         shared: Arc<SharedState>,
         supervisor: Thread,
     ) -> Result<(Self::Stream, Self::DeviceToken), BackendFailure>;
+}
+
+impl OutputBackend for CpalBackend {
+    type Stream = cpal::Stream;
+    type DeviceToken = DeviceId;
+
+    fn default_device_token(&mut self) -> Result<Option<Self::DeviceToken>, BackendFailure> {
+        let Some(device) = self.host.default_output_device() else {
+            return Ok(None);
+        };
+        device.id().map(Some).map_err(|_| BackendFailure)
+    }
+
+    fn open_default_stream(
+        &mut self,
+        shared: Arc<SharedState>,
+        supervisor: Thread,
+    ) -> Result<(Self::Stream, Self::DeviceToken), BackendFailure> {
+        let device = self.host.default_output_device().ok_or(BackendFailure)?;
+        let supported_configs = device
+            .supported_output_configs()
+            .map_err(|_| BackendFailure)?;
+        let selected = select_supported_config(supported_configs).ok_or(BackendFailure)?;
+        let device_token = device.id().map_err(|_| BackendFailure)?;
+        let sample_format = selected.sample_format();
+        let base_config = selected.config();
+
+        for buffer_size in buffer_preferences() {
+            let mut config = base_config;
+            config.buffer_size = buffer_size;
+            if let Ok(stream) = build_stream_for_format(
+                &device,
+                sample_format,
+                config,
+                shared.clone(),
+                supervisor.clone(),
+            ) {
+                if stream.play().is_ok() {
+                    return Ok((stream, device_token));
+                }
+            }
+        }
+
+        Err(BackendFailure)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +261,21 @@ impl<B: OutputBackend> OutputSupervisor<B> {
     }
 }
 
+pub(crate) fn run_supervisor<B>(backend: B, shared: Arc<SharedState>)
+where
+    B: OutputBackend,
+{
+    let origin = Instant::now();
+    let mut supervisor = OutputSupervisor::new(backend, shared, Duration::ZERO);
+
+    loop {
+        if supervisor.step(origin.elapsed(), thread::current()) == SupervisorStep::Stop {
+            break;
+        }
+        thread::park_timeout(supervisor.wait_duration(origin.elapsed()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -123,6 +286,46 @@ mod tests {
 
     use super::*;
     use crate::audio::{AudioEngineHandle, AudioEngineStatus, PcmSample, SharedState};
+
+    #[test]
+    fn selects_stereo_f32_at_a_standard_rate() {
+        use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfigRange};
+
+        let range = |channels, format, min, max| {
+            SupportedStreamConfigRange::new(
+                channels,
+                min,
+                max,
+                SupportedBufferSize::Range {
+                    min: 64,
+                    max: 1_024,
+                },
+                format,
+            )
+        };
+        let selected = select_supported_config(vec![
+            range(1, SampleFormat::I16, 8_000, 96_000),
+            range(2, SampleFormat::F32, 44_100, 96_000),
+            range(6, SampleFormat::F32, 44_100, 192_000),
+        ])
+        .unwrap();
+
+        assert_eq!(selected.channels(), 2);
+        assert_eq!(selected.sample_format(), SampleFormat::F32);
+        assert_eq!(selected.sample_rate(), 48_000);
+    }
+
+    #[test]
+    fn buffer_preferences_are_low_latency_then_compatible() {
+        assert_eq!(
+            buffer_preferences(),
+            [
+                cpal::BufferSize::Fixed(128),
+                cpal::BufferSize::Fixed(256),
+                cpal::BufferSize::Default,
+            ]
+        );
+    }
 
     #[derive(Default)]
     struct FakeBackend {
