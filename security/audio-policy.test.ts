@@ -310,24 +310,24 @@ function parseWorkflowEntry(line: string, lineNumber: number): WorkflowEntry | n
 function assertReviewedWorkflowSyntax(workflow: string): void {
   const lines: string[] = [];
   let blockScalarIndentation: number | undefined;
-  let pendingBlockBlankLines = 0;
+  let pendingBlockBlankLines: string[] = [];
   for (const rawLine of workflow.replace(/\r\n?/g, "\n").split("\n")) {
-    const line = rawLine.trimEnd();
     if (blockScalarIndentation !== undefined) {
-      if (line.trim() === "") {
-        pendingBlockBlankLines += 1;
+      if (/^\s*$/.test(rawLine)) {
+        pendingBlockBlankLines.push(rawLine);
         continue;
       }
-      const indentation = line.length - line.trimStart().length;
+      const indentation = rawLine.length - rawLine.trimStart().length;
       if (indentation > blockScalarIndentation) {
-        lines.push(...Array<string>(pendingBlockBlankLines).fill(""), line);
-        pendingBlockBlankLines = 0;
+        lines.push(...pendingBlockBlankLines, rawLine);
+        pendingBlockBlankLines = [];
         continue;
       }
       blockScalarIndentation = undefined;
-      pendingBlockBlankLines = 0;
+      pendingBlockBlankLines = [];
     }
 
+    const line = rawLine.trimEnd();
     const withoutComment = line.replace(/(?:^|\s+)#.*$/, "").trimEnd();
     if (withoutComment.trim() === "") {
       continue;
@@ -354,7 +354,7 @@ function assertReviewedWorkflowSyntax(workflow: string): void {
 
 function workflowEntries(workflow: string): WorkflowEntry[] {
   const entries: WorkflowEntry[] = [];
-  for (const [index, line] of workflow.replace(/\r\n/g, "\n").split("\n").entries()) {
+  for (const [index, line] of workflow.replace(/\r\n?/g, "\n").split("\n").entries()) {
     const entry = parseWorkflowEntry(line, index);
     if (entry) {
       entries.push(entry);
@@ -374,7 +374,7 @@ function inlineList(value: string): string[] {
 }
 
 function assertWorkflowPolicy(workflow: string): void {
-  const normalized = workflow.replace(/\r\n/g, "\n");
+  const normalized = workflow.replace(/\r\n?/g, "\n");
   assertReviewedWorkflowSyntax(normalized);
   const entries = workflowEntries(normalized);
   if (/\bsecrets\b/i.test(normalized)) {
@@ -591,6 +591,12 @@ it("keeps desktop CI immutable and fail-closed", () => {
   assertWorkflowPolicy(read(".github/workflows/ci.yml"));
 });
 
+it("accepts reviewed workflow line-ending normalization", () => {
+  const workflow = read(".github/workflows/ci.yml");
+  expect(() => assertWorkflowPolicy(workflow.replace(/\n/g, "\r\n"))).not.toThrow();
+  expect(() => assertWorkflowPolicy(workflow.replace(/\n/g, "\r"))).not.toThrow();
+});
+
 it("rejects workflow bypass fixtures", () => {
   const workflow = read(".github/workflows/ci.yml");
   const namedAction = workflow.replace(
@@ -671,6 +677,15 @@ it("rejects comments inserted into the reviewed shell block", () => {
   const workflow = read(".github/workflows/ci.yml").replace(
     "            curl \\\n            file \\",
     "            curl \\\n            # breaks the continued apt command\n            file \\",
+  );
+
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects trailing whitespace after a reviewed shell continuation", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "          sudo apt-get install --yes \\",
+    "          sudo apt-get install --yes \\   ",
   );
 
   expect(() => assertWorkflowPolicy(workflow)).toThrow();
