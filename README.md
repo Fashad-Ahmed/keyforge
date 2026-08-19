@@ -14,6 +14,10 @@ This repository currently contains Milestone 2: a secure Tauri 2 desktop foundat
 - The audio engine accepts validated, decoded PCM only; encoded audio bytes and file paths are outside its boundary.
 - Its fixed mixer supports 32 simultaneous voices, and master volume is validated and held only in memory.
 - The audio engine has no production IPC or UI integration in Milestone 2.
+- `AudioEngine` is not constructed during ordinary Tauri startup in Milestone 2.
+- Milestone 3 owns sound-pack loading and decoding.
+- Milestone 4 owns sanitized input integration.
+- Milestone 6 owns product UI and persistent volume.
 - The application contains no telemetry, analytics, accounts, or runtime networking.
 
 See [the trust-boundary documentation](docs/architecture/trust-boundaries.md) and [threat model](docs/security/threat-model.md) before adding native functionality.
