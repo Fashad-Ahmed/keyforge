@@ -13,8 +13,12 @@ type CargoDependency = {
   kind: string | null;
   name: string;
   optional: boolean;
+  path: string | null;
+  registry: string | null;
   rename: string | null;
   req: string;
+  source: string | null;
+  target: string | null;
   uses_default_features: boolean;
 };
 
@@ -104,51 +108,72 @@ const ALLOWED_ACTIONS = [
   "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
   "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
 ];
+const CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index";
 const APPROVED_DEPENDENCIES = [
   {
     name: "cpal",
     rename: null,
+    source: CRATES_IO_SOURCE,
     req: "^0.18.1",
     kind: null,
     optional: false,
     uses_default_features: false,
     features: [],
+    target: null,
+    registry: null,
+    path: null,
   },
   {
     name: "crossbeam-queue",
     rename: null,
+    source: CRATES_IO_SOURCE,
     req: "^0.3.13",
     kind: null,
     optional: false,
     uses_default_features: true,
     features: [],
+    target: null,
+    registry: null,
+    path: null,
   },
   {
     name: "serde",
     rename: null,
+    source: CRATES_IO_SOURCE,
     req: "^1.0",
     kind: null,
     optional: false,
     uses_default_features: true,
     features: ["derive"],
+    target: null,
+    registry: null,
+    path: null,
   },
   {
     name: "tauri",
     rename: null,
+    source: CRATES_IO_SOURCE,
     req: "^2.11.3",
     kind: null,
     optional: false,
     uses_default_features: true,
     features: [],
+    target: null,
+    registry: null,
+    path: null,
   },
   {
     name: "tauri-build",
     rename: null,
+    source: CRATES_IO_SOURCE,
     req: "^2.6.3",
     kind: "build",
     optional: false,
     uses_default_features: true,
     features: [],
+    target: null,
+    registry: null,
+    path: null,
   },
 ];
 
@@ -183,6 +208,234 @@ function filesWithExtensions(directory: string, extensions: string[]): string[] 
     }
   }
   return files.sort();
+}
+
+function cargoPolicySources(): Map<string, string> {
+  const ignoredDirectories = new Set([".git", ".next", "node_modules", "out", "target"]);
+  const sources = new Map<string, string>();
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(projectPath(directory), { withFileTypes: true })) {
+      const path = directory === "." ? entry.name : `${directory}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!ignoredDirectories.has(entry.name)) {
+          visit(path);
+        }
+      } else if (
+        entry.isFile() &&
+        (entry.name === "Cargo.toml" || /(?:^|\/)\.cargo\/config[^/]*$/.test(path))
+      ) {
+        sources.set(path, read(path));
+      }
+    }
+  };
+  visit(".");
+  return sources;
+}
+
+function stripTomlComment(line: string): string {
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (quote === '"') {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+    } else if (quote === "'") {
+      if (character === quote) {
+        quote = null;
+      }
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "#") {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+
+function decodeTomlBasicKey(value: string): string {
+  let decoded = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character !== "\\") {
+      decoded += character;
+      continue;
+    }
+    const escape = value[index + 1];
+    const simpleEscapes: Record<string, string> = {
+      '"': '"',
+      "\\": "\\",
+      b: "\b",
+      f: "\f",
+      n: "\n",
+      r: "\r",
+      t: "\t",
+    };
+    if (escape in simpleEscapes) {
+      decoded += simpleEscapes[escape];
+      index += 1;
+      continue;
+    }
+    if (escape === "u" || escape === "U") {
+      const length = escape === "u" ? 4 : 8;
+      const digits = value.slice(index + 2, index + 2 + length);
+      if (!new RegExp(`^[0-9A-Fa-f]{${length}}$`).test(digits)) {
+        fail("invalid Unicode escape in Cargo policy key");
+      }
+      const codePoint = Number.parseInt(digits, 16);
+      try {
+        decoded += String.fromCodePoint(codePoint);
+      } catch {
+        fail("invalid Unicode code point in Cargo policy key");
+      }
+      index += length + 1;
+      continue;
+    }
+    fail("invalid escape in Cargo policy key");
+  }
+  return decoded;
+}
+
+function decodeTomlKeySegment(rawSegment: string): string {
+  const segment = rawSegment.trim();
+  if (segment.startsWith('"') && segment.endsWith('"')) {
+    return decodeTomlBasicKey(segment.slice(1, -1));
+  }
+  if (segment.startsWith("'") && segment.endsWith("'")) {
+    return segment.slice(1, -1);
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(segment)) {
+    fail("invalid Cargo policy key");
+  }
+  return segment;
+}
+
+function splitTomlDottedKey(rawKey: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < rawKey.length; index += 1) {
+    const character = rawKey[index];
+    if (quote === '"') {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+    } else if (quote === "'") {
+      if (character === quote) {
+        quote = null;
+      }
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ".") {
+      segments.push(decodeTomlKeySegment(rawKey.slice(start, index)));
+      start = index + 1;
+    }
+  }
+  if (quote !== null || escaped) {
+    fail("unterminated Cargo policy key");
+  }
+  segments.push(decodeTomlKeySegment(rawKey.slice(start)));
+  return segments;
+}
+
+function tomlTableKey(line: string): string[] | null {
+  const trimmed = line.trim();
+  const arrayTable = trimmed.startsWith("[[") && trimmed.endsWith("]]");
+  const regularTable = trimmed.startsWith("[") && trimmed.endsWith("]");
+  if (!arrayTable && !regularTable) {
+    return null;
+  }
+  const boundary = arrayTable ? 2 : 1;
+  return splitTomlDottedKey(trimmed.slice(boundary, -boundary));
+}
+
+function tomlAssignmentKey(line: string): string[] | null {
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (quote === '"') {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+    } else if (quote === "'") {
+      if (character === quote) {
+        quote = null;
+      }
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "=") {
+      return splitTomlDottedKey(line.slice(0, index));
+    }
+  }
+  return null;
+}
+
+function assertCargoSourcePolicy(sources: Map<string, string>): void {
+  for (const [path, contents] of sources) {
+    const isManifest = path === "Cargo.toml" || path.endsWith("/Cargo.toml");
+    const isCargoConfig = /(?:^|\/)\.cargo\/config[^/]*$/.test(path);
+    if (!isManifest && !isCargoConfig) {
+      continue;
+    }
+    let currentTable: string[] = [];
+    for (const rawLine of contents.replace(/\r\n?/g, "\n").split("\n")) {
+      const line = stripTomlComment(rawLine).trim();
+      if (line === "") {
+        continue;
+      }
+      const table = tomlTableKey(line);
+      if (table) {
+        currentTable = table;
+        if (isManifest && table[0] === "patch") {
+          fail(`${path} contains an unapproved Cargo patch table`);
+        }
+        if (isManifest && table[0] === "replace") {
+          fail(`${path} contains an unapproved Cargo replace table`);
+        }
+        if (isCargoConfig && table[0] === "source") {
+          fail(`${path} contains an unapproved Cargo source override`);
+        }
+        continue;
+      }
+      const assignment = tomlAssignmentKey(line);
+      if (
+        isManifest &&
+        currentTable.length === 0 &&
+        assignment?.[0] === "patch"
+      ) {
+        fail(`${path} contains an unapproved Cargo patch assignment`);
+      }
+      if (
+        isManifest &&
+        currentTable.length === 0 &&
+        assignment?.[0] === "replace"
+      ) {
+        fail(`${path} contains an unapproved Cargo replace assignment`);
+      }
+      if (
+        isCargoConfig &&
+        currentTable.length === 0 &&
+        assignment?.[0] === "source"
+      ) {
+        fail(`${path} contains an unapproved Cargo source override`);
+      }
+    }
+  }
 }
 
 function capabilitySources(): Map<string, string> {
@@ -266,19 +519,27 @@ function normalizedDependencies(
   kind: string | null;
   name: string;
   optional: boolean;
+  path: string | null;
+  registry: string | null;
   rename: string | null;
   req: string;
+  source: string | null;
+  target: string | null;
   uses_default_features: boolean;
 }> {
   return dependencies
     .map((dependency) => ({
       name: dependency.name,
       rename: dependency.rename,
+      source: dependency.source,
       req: dependency.req,
       kind: dependency.kind,
       optional: dependency.optional,
       uses_default_features: dependency.uses_default_features,
       features: [...dependency.features].sort(),
+      target: dependency.target,
+      registry: dependency.registry,
+      path: dependency.path ?? null,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
@@ -555,6 +816,7 @@ it("rejects alternate and extra native handler fixtures", () => {
 });
 
 it("uses exactly the approved complete direct dependency records", () => {
+  assertCargoSourcePolicy(cargoPolicySources());
   const metadata = cargoMetadata();
   const keyforge = metadata.packages.find(
     (candidate) =>
@@ -574,17 +836,95 @@ it("rejects Cargo dependency aliases, additions, and feature mutations", () => {
   addition.push({
     name: "reqwest",
     rename: null,
+    source: CRATES_IO_SOURCE,
     req: "^0.12.0",
     kind: "dev",
     optional: false,
     uses_default_features: true,
     features: [],
+    target: null,
+    registry: null,
+    path: null,
   });
   expect(() => assertCargoDependencyPolicy(addition)).toThrow("complete records");
 
   const featureChange = approvedDependencyFixture();
   featureChange[3].features.push("devtools");
   expect(() => assertCargoDependencyPolicy(featureChange)).toThrow("complete records");
+});
+
+it("rejects local path dependency origins", () => {
+  const localPath = approvedDependencyFixture();
+  localPath[0].source = null;
+  localPath[0].path = "../local-cpal";
+
+  expect(() => assertCargoDependencyPolicy(localPath)).toThrow("complete records");
+});
+
+it("rejects alternate dependency sources registries and targets", () => {
+  const alternateSource = approvedDependencyFixture();
+  alternateSource[0].source = "git+https://example.invalid/cpal";
+  expect(() => assertCargoDependencyPolicy(alternateSource)).toThrow("complete records");
+
+  const alternateRegistry = approvedDependencyFixture();
+  alternateRegistry[0].registry = "private";
+  expect(() => assertCargoDependencyPolicy(alternateRegistry)).toThrow("complete records");
+
+  const targetSpecific = approvedDependencyFixture();
+  targetSpecific[0].target = "cfg(target_os = \"macos\")";
+  expect(() => assertCargoDependencyPolicy(targetSpecific)).toThrow("complete records");
+});
+
+it("rejects Cargo patch and replace tables from pure fixtures", () => {
+  const patch = new Map([
+    [
+      "src-tauri/Cargo.toml",
+      '["pa\\u0074ch".crates-io]\ncpal = { path = "../local-cpal" }\n',
+    ],
+  ]);
+  expect(() => assertCargoSourcePolicy(patch)).toThrow("patch");
+
+  const replacement = new Map([
+    [
+      "src-tauri/Cargo.toml",
+      "[ 'replace' ]\n\"cpal:0.18.1\" = { path = '../local-cpal' }\n",
+    ],
+  ]);
+  expect(() => assertCargoSourcePolicy(replacement)).toThrow("replace");
+
+  const dottedPatch = new Map([
+    [
+      "src-tauri/Cargo.toml",
+      'patch.crates-io.cpal = { path = "../local-cpal" }\n',
+    ],
+  ]);
+  expect(() => assertCargoSourcePolicy(dottedPatch)).toThrow("patch");
+
+  const inlineReplace = new Map([
+    [
+      "src-tauri/Cargo.toml",
+      'replace = { "cpal:0.18.1" = { path = "../local-cpal" } }\n',
+    ],
+  ]);
+  expect(() => assertCargoSourcePolicy(inlineReplace)).toThrow("replace");
+});
+
+it("rejects repository Cargo source replacement configs from pure fixtures", () => {
+  const sourceTable = new Map([
+    [
+      ".cargo/config.toml",
+      '["so\\u0075rce".crates-io]\nreplace-with = "vendored"\n',
+    ],
+  ]);
+  expect(() => assertCargoSourcePolicy(sourceTable)).toThrow("source override");
+
+  const dottedSource = new Map([
+    [
+      "src-tauri/.cargo/config.local",
+      'source.crates-io.replace-with = "vendored"\n',
+    ],
+  ]);
+  expect(() => assertCargoSourcePolicy(dottedSource)).toThrow("source override");
 });
 
 it("keeps desktop CI immutable and fail-closed", () => {
