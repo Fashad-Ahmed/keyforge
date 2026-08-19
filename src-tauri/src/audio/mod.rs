@@ -17,6 +17,9 @@ mod sample;
 #[allow(dead_code)]
 mod recovery;
 
+#[allow(dead_code)]
+mod cpal_output;
+
 use sample::SampleRegistry;
 
 pub use sample::{ChannelCount, PcmSample, PcmSampleError, RegisterSampleError, SampleId};
@@ -123,6 +126,10 @@ impl SharedState {
 
     pub(crate) fn set_status(&self, status: AudioEngineStatus) {
         self.status.store(status as u8, Ordering::Release);
+    }
+
+    pub(crate) fn status(&self) -> AudioEngineStatus {
+        AudioEngineStatus::from_u8(self.status.load(Ordering::Acquire))
     }
 
     pub(crate) fn clear_commands(&self) {
