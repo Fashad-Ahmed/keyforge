@@ -9,6 +9,9 @@ use std::{
 use crossbeam_queue::ArrayQueue;
 
 #[allow(dead_code)]
+mod mixer;
+
+#[allow(dead_code)]
 mod sample;
 
 use sample::SampleRegistry;
@@ -70,6 +73,7 @@ impl fmt::Display for VolumeError {
 impl std::error::Error for VolumeError {}
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub(crate) struct AudioCommand {
     sample_id: SampleId,
     sample: Arc<PcmSample>,
@@ -77,6 +81,11 @@ pub(crate) struct AudioCommand {
 
 #[allow(dead_code)]
 impl AudioCommand {
+    #[cfg(test)]
+    pub(crate) fn new_for_test(sample_id: SampleId, sample: Arc<PcmSample>) -> Self {
+        Self { sample_id, sample }
+    }
+
     pub(crate) fn sample_id(&self) -> SampleId {
         self.sample_id
     }
