@@ -36,6 +36,50 @@ type WorkflowEntry = {
   value: string;
 };
 
+const REVIEWED_WORKFLOW_LINES = new Set([
+  "name: CI",
+  "on:",
+  "  push:",
+  "    branches: [main]",
+  "  pull_request:",
+  "permissions:",
+  "  contents: read",
+  "env:",
+  '  NEXT_TELEMETRY_DISABLED: "1"',
+  "jobs:",
+  "  frontend:",
+  "    runs-on: ubuntu-24.04",
+  "    steps:",
+  "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+  "      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa",
+  "        with:",
+  "          run_install: false",
+  "      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+  "          node-version: 22.23.2",
+  "          cache: pnpm",
+  "      - run: pnpm install --frozen-lockfile",
+  "      - run: pnpm test",
+  "      - run: pnpm build",
+  "  rust:",
+  "    strategy:",
+  "      fail-fast: false",
+  "      matrix:",
+  "        os: [ubuntu-24.04, macos-15, windows-2025]",
+  "    runs-on: ${{ matrix.os }}",
+  "      - name: Install Tauri Linux prerequisites",
+  "        if: runner.os == 'Linux'",
+  "        run: |",
+  "      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+  "        with:",
+  "          toolchain: 1.88.0",
+  "          components: rustfmt, clippy",
+  "      - run: cargo metadata --locked --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1",
+  "      - if: runner.os == 'Linux'",
+  "        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+  "      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+  "      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
+]);
+
 const PROJECT_ROOT = process.cwd();
 const ALLOWED_HANDLER = "tauri::generate_handler![commands::app_info::get_app_info]";
 const ALLOWED_ACTIONS = [
@@ -248,6 +292,47 @@ function parseWorkflowEntry(line: string, lineNumber: number): WorkflowEntry | n
   };
 }
 
+function assertReviewedWorkflowSyntax(workflow: string): void {
+  let blockScalarIndentation: number | undefined;
+  const lines = workflow.replace(/\r\n/g, "\n").split("\n");
+  for (const [index, line] of lines.entries()) {
+    const withoutComment = line.replace(/\s+#.*$/, "");
+    if (withoutComment.trim() === "") {
+      continue;
+    }
+    const indentation = withoutComment.length - withoutComment.trimStart().length;
+    if (
+      blockScalarIndentation !== undefined &&
+      indentation > blockScalarIndentation
+    ) {
+      continue;
+    }
+    blockScalarIndentation = undefined;
+    if (REVIEWED_WORKFLOW_LINES.has(withoutComment)) {
+      if (withoutComment.endsWith("run: |")) {
+        blockScalarIndentation = indentation;
+      }
+      continue;
+    }
+    if (/^\s*(?:-\s*)?["']/.test(withoutComment)) {
+      fail(`quoted or escaped YAML keys are not allowed on line ${index + 1}`);
+    }
+    if (/(?:^|:\s*|-\s*)[&*!][A-Za-z_]/.test(withoutComment)) {
+      fail(`YAML anchors, tags, and aliases are not allowed on line ${index + 1}`);
+    }
+    if (/[\[\]{}]/.test(withoutComment)) {
+      fail(`flow collections are not allowed on line ${index + 1}`);
+    }
+    if (indentation === 0) {
+      fail(`unknown top-level YAML key on line ${index + 1}`);
+    }
+    if (indentation === 2) {
+      fail(`workflow jobs differ from the reviewed set on line ${index + 1}`);
+    }
+    fail(`unsupported YAML shape on line ${index + 1}`);
+  }
+}
+
 function workflowEntries(workflow: string): WorkflowEntry[] {
   const entries: WorkflowEntry[] = [];
   for (const [index, line] of workflow.replace(/\r\n/g, "\n").split("\n").entries()) {
@@ -271,6 +356,7 @@ function inlineList(value: string): string[] {
 
 function assertWorkflowPolicy(workflow: string): void {
   const normalized = workflow.replace(/\r\n/g, "\n");
+  assertReviewedWorkflowSyntax(normalized);
   const entries = workflowEntries(normalized);
   if (/\bsecrets\b/i.test(normalized)) {
     fail("workflow secrets are not allowed");
@@ -492,34 +578,63 @@ it("rejects workflow bypass fixtures", () => {
     "      - run: pnpm build",
     "      - run: pnpm build\n      - name: Cache dependencies\n        uses: actions/cache@0000000000000000000000000000000000000000",
   );
-  expect(() => assertWorkflowPolicy(namedAction)).toThrow("pinned allowlist");
+  expect(() => assertWorkflowPolicy(namedAction)).toThrow();
 
   const reusableJob = workflow.replace(
     "    steps:\n",
     "    uses: owner/reusable-workflow@0000000000000000000000000000000000000000\n    steps:\n",
   );
-  expect(() => assertWorkflowPolicy(reusableJob)).toThrow("reusable workflow");
+  expect(() => assertWorkflowPolicy(reusableJob)).toThrow();
 
   const jobPermissions = workflow.replace(
     "    steps:\n",
     "    permissions: write-all\n    steps:\n",
   );
-  expect(() => assertWorkflowPolicy(jobPermissions)).toThrow("job-level permissions");
+  expect(() => assertWorkflowPolicy(jobPermissions)).toThrow();
 
   const quotedContinue = workflow.replace(
     "      - run: pnpm build",
     '      - run: pnpm build\n      "continue-on-error": "true"',
   );
-  expect(() => assertWorkflowPolicy(quotedContinue)).toThrow("continue-on-error");
+  expect(() => assertWorkflowPolicy(quotedContinue)).toThrow();
 
   const extraJob = `${workflow}\n  extra:\n    runs-on: ubuntu-24.04\n    steps: []\n`;
-  expect(() => assertWorkflowPolicy(extraJob)).toThrow("workflow jobs");
+  expect(() => assertWorkflowPolicy(extraJob)).toThrow();
 
   const extraMatrixOs = workflow.replace(
     "os: [ubuntu-24.04, macos-15, windows-2025]",
     "os: [ubuntu-24.04, macos-15, windows-2025, freebsd-14]",
   );
-  expect(() => assertWorkflowPolicy(extraMatrixOs)).toThrow("matrix OS values");
+  expect(() => assertWorkflowPolicy(extraMatrixOs)).toThrow();
+});
+
+it("rejects additional valid job IDs that the former reader ignored", () => {
+  const workflow = `${read(".github/workflows/ci.yml")}\n  _extra:\n    runs-on: ubuntu-24.04\n    steps: []\n`;
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects flow-style action steps that the former reader ignored", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "      - run: pnpm build",
+    "      - run: pnpm build\n      - { uses: actions/cache@0000000000000000000000000000000000000000 }",
+  );
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects quoted escaped continue-on-error keys that the former reader ignored", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "      - run: pnpm build",
+    '      - run: pnpm build\n      "continue\\u002don\\u002derror": true',
+  );
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects quoted escaped job permissions that the former reader ignored", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "    steps:\n",
+    '    "permissi\\u006fns": write-all\n    steps:\n',
+  );
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
 });
 
 it("documents M2 startup and later ownership exclusions", () => {
