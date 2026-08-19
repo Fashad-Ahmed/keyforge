@@ -1,7 +1,7 @@
 # KeyForge Milestone 2 — Audio Engine Design
 
-**Date:** 2026-08-19  
-**Status:** Approved design  
+**Date:** 2026-08-19
+**Status:** Approved design
 **Scope:** Native, low-latency PCM playback engine only
 
 ## Goal
