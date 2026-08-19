@@ -35,12 +35,18 @@ impl RecoveryController {
     }
 
     pub(crate) fn opened(&mut self) {
+        if self.stopped {
+            return;
+        }
         self.status = AudioEngineStatus::Ready;
         self.consecutive_failures = 0;
         self.was_ready = true;
     }
 
     pub(crate) fn open_failed(&mut self, now: Duration) {
+        if self.stopped {
+            return;
+        }
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         self.status = if self.consecutive_failures >= 5 {
             AudioEngineStatus::Unavailable
@@ -57,6 +63,9 @@ impl RecoveryController {
     }
 
     pub(crate) fn stream_lost(&mut self, now: Duration) {
+        if self.stopped {
+            return;
+        }
         self.status = AudioEngineStatus::Recovering;
         self.consecutive_failures = 0;
         self.next_attempt_at = now;
@@ -125,6 +134,27 @@ mod tests {
     fn stop_is_terminal() {
         let mut recovery = RecoveryController::new(Duration::ZERO);
         recovery.stop();
+        assert_eq!(recovery.status(), AudioEngineStatus::Stopped);
+        assert!(!recovery.attempt_due(Duration::from_secs(100)));
+    }
+
+    #[test]
+    fn stop_ignores_all_subsequent_events() {
+        let mut recovery = RecoveryController::new(Duration::ZERO);
+        recovery.stop();
+        recovery.opened();
+        assert_eq!(recovery.status(), AudioEngineStatus::Stopped);
+        assert!(!recovery.attempt_due(Duration::from_secs(100)));
+
+        let mut recovery = RecoveryController::new(Duration::ZERO);
+        recovery.stop();
+        recovery.open_failed(Duration::from_secs(10));
+        assert_eq!(recovery.status(), AudioEngineStatus::Stopped);
+        assert!(!recovery.attempt_due(Duration::from_secs(100)));
+
+        let mut recovery = RecoveryController::new(Duration::ZERO);
+        recovery.stop();
+        recovery.stream_lost(Duration::from_secs(10));
         assert_eq!(recovery.status(), AudioEngineStatus::Stopped);
         assert!(!recovery.attempt_due(Duration::from_secs(100)));
     }
