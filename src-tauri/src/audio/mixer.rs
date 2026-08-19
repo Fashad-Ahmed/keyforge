@@ -76,11 +76,18 @@ impl MixerCore {
     ) where
         T: SizedSample + FromSample<f32>,
     {
+        let requested_volume = f32::from_bits(master_volume.load(Ordering::Acquire));
+        if requested_volume != self.target_volume {
+            let ramp_frames = (output_rate / 200).max(1);
+            self.target_volume = requested_volume;
+            self.ramp_frames_remaining = ramp_frames;
+            self.volume_step = (self.target_volume - self.current_volume) / ramp_frames as f32;
+        }
+
         while let Some(command) = commands.pop() {
             self.start_voice(command);
         }
 
-        self.current_volume = f32::from_bits(master_volume.load(Ordering::Acquire));
         let output_channels = usize::from(output_channels);
         if output_channels == 0 {
             output.fill(T::EQUILIBRIUM);
@@ -88,6 +95,14 @@ impl MixerCore {
         }
 
         for frame in output.chunks_exact_mut(output_channels) {
+            if self.ramp_frames_remaining > 0 {
+                self.current_volume += self.volume_step;
+                self.ramp_frames_remaining -= 1;
+                if self.ramp_frames_remaining == 0 {
+                    self.current_volume = self.target_volume;
+                }
+            }
+
             let mut left = 0.0;
             let mut right = 0.0;
 
@@ -301,5 +316,35 @@ mod tests {
         );
         assert_eq!(output, [1.0]);
         assert_eq!(mixer.active_voice_count_for_test(), 0);
+    }
+
+    #[test]
+    fn ramps_volume_over_exactly_five_milliseconds() {
+        assert_eq!(
+            PcmSample::new(1_000, 1, vec![1.0; 5]),
+            Err(PcmSampleError::SampleRate),
+        );
+        let queue = ArrayQueue::new(1);
+        queue.push(command(1, pcm(8_000, 1, &[1.0; 40]))).unwrap();
+        let volume = AtomicU32::new(0.0_f32.to_bits());
+        let mut output = [0.0_f32; 40];
+        MixerCore::new(1.0).render(&mut output, 8_000, 1, &queue, &volume);
+        assert!((output[0] - 0.975).abs() < 0.000_01);
+        assert_eq!(output[39], 0.0);
+    }
+
+    #[test]
+    fn rendering_allocates_nothing_after_construction() {
+        let queue = ArrayQueue::new(1);
+        let retained = pcm(48_000, 1, &[0.1; 64]);
+        queue.push(command(1, retained.clone())).unwrap();
+        let volume = AtomicU32::new(1.0_f32.to_bits());
+        let mut mixer = MixerCore::new(1.0);
+        let mut output = [0.0_f32; 64];
+        let allocations = crate::test_alloc::allocations_during(|| {
+            mixer.render(&mut output, 48_000, 1, &queue, &volume);
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(Arc::strong_count(&retained), 1);
     }
 }
