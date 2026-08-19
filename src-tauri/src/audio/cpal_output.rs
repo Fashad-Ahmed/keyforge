@@ -468,6 +468,34 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_during_successful_play_prevents_candidate_publication() {
+        let shared = SharedState::new();
+        let mut generations = StreamGenerationCounter::new();
+        let mut builds = 0;
+        let mut plays = 0;
+
+        let result = open_with_buffer_preferences(
+            &shared,
+            &mut generations,
+            |buffer_size, _| {
+                builds += 1;
+                assert_eq!(buffer_size, BufferSize::Fixed(128));
+                Ok("candidate")
+            },
+            |candidate| {
+                plays += 1;
+                assert_eq!(*candidate, "candidate");
+                shared.shutdown.store(true, Ordering::Release);
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(BackendFailure));
+        assert_eq!(builds, 1);
+        assert_eq!(plays, 1);
+    }
+
+    #[test]
     fn generation_exhaustion_never_wraps_to_the_no_signal_sentinel() {
         let mut generations = StreamGenerationCounter {
             next: std::num::NonZeroU64::new(u64::MAX),
