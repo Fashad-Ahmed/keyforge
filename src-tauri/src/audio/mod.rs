@@ -14,6 +14,9 @@ mod mixer;
 #[allow(dead_code)]
 mod sample;
 
+#[allow(dead_code)]
+mod recovery;
+
 use sample::SampleRegistry;
 
 pub use sample::{ChannelCount, PcmSample, PcmSampleError, RegisterSampleError, SampleId};
