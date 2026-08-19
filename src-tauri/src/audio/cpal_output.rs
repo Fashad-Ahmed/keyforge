@@ -1,5 +1,6 @@
 use std::{
     fmt::Debug,
+    num::NonZeroU64,
     sync::{atomic::Ordering, Arc},
     thread::{self, Thread},
     time::{Duration, Instant},
@@ -18,14 +19,49 @@ const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BackendFailure;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StreamGeneration(NonZeroU64);
+
+impl StreamGeneration {
+    fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+struct StreamGenerationCounter {
+    next: Option<NonZeroU64>,
+}
+
+impl StreamGenerationCounter {
+    fn new() -> Self {
+        Self {
+            next: NonZeroU64::new(1),
+        }
+    }
+
+    fn next(&mut self) -> Result<StreamGeneration, BackendFailure> {
+        let generation = self.next.ok_or(BackendFailure)?;
+        self.next = generation.get().checked_add(1).and_then(NonZeroU64::new);
+        Ok(StreamGeneration(generation))
+    }
+}
+
+impl Default for StreamGenerationCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub(crate) struct CpalBackend {
     host: cpal::Host,
+    generations: StreamGenerationCounter,
 }
 
 impl CpalBackend {
     pub(crate) fn new() -> Self {
         Self {
             host: cpal::default_host(),
+            generations: StreamGenerationCounter::new(),
         }
     }
 }
@@ -49,11 +85,18 @@ fn buffer_preferences() -> [BufferSize; 3] {
     ]
 }
 
+fn report_stream_failure(shared: &SharedState, generation: StreamGeneration) {
+    shared
+        .stream_failure_generation
+        .fetch_max(generation.get(), Ordering::Release);
+}
+
 fn build_typed_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
     shared: Arc<SharedState>,
     supervisor: Thread,
+    generation: StreamGeneration,
 ) -> Result<cpal::Stream, BackendFailure>
 where
     T: SizedSample + FromSample<f32>,
@@ -77,7 +120,7 @@ where
                 );
             },
             move |_| {
-                error_shared.stream_failed.store(true, Ordering::Release);
+                report_stream_failure(&error_shared, generation);
                 supervisor.unpark();
             },
             Some(Duration::from_secs(2)),
@@ -91,10 +134,11 @@ fn build_stream_for_format(
     config: StreamConfig,
     shared: Arc<SharedState>,
     supervisor: Thread,
+    generation: StreamGeneration,
 ) -> Result<cpal::Stream, BackendFailure> {
     macro_rules! build {
         ($sample:ty) => {
-            build_typed_stream::<$sample>(device, config, shared, supervisor)
+            build_typed_stream::<$sample>(device, config, shared, supervisor, generation)
         };
     }
 
@@ -115,6 +159,36 @@ fn build_stream_for_format(
     }
 }
 
+fn open_with_buffer_preferences<S>(
+    shared: &SharedState,
+    generations: &mut StreamGenerationCounter,
+    mut build: impl FnMut(BufferSize, StreamGeneration) -> Result<S, BackendFailure>,
+    mut play: impl FnMut(&S) -> Result<(), BackendFailure>,
+) -> Result<(S, StreamGeneration), BackendFailure> {
+    for buffer_size in buffer_preferences() {
+        let generation = generations.next()?;
+        if shared.shutdown.load(Ordering::Acquire) {
+            return Err(BackendFailure);
+        }
+        let stream = match build(buffer_size, generation) {
+            Ok(stream) => stream,
+            Err(BackendFailure) => continue,
+        };
+        if shared.shutdown.load(Ordering::Acquire) {
+            return Err(BackendFailure);
+        }
+        if play(&stream).is_err() {
+            continue;
+        }
+        if shared.shutdown.load(Ordering::Acquire) {
+            return Err(BackendFailure);
+        }
+        return Ok((stream, generation));
+    }
+
+    Err(BackendFailure)
+}
+
 pub(crate) trait OutputBackend {
     type Stream;
     type DeviceToken: Clone + Debug + Eq;
@@ -124,7 +198,7 @@ pub(crate) trait OutputBackend {
         &mut self,
         shared: Arc<SharedState>,
         supervisor: Thread,
-    ) -> Result<(Self::Stream, Self::DeviceToken), BackendFailure>;
+    ) -> Result<(Self::Stream, Self::DeviceToken, StreamGeneration), BackendFailure>;
 }
 
 impl OutputBackend for CpalBackend {
@@ -142,7 +216,7 @@ impl OutputBackend for CpalBackend {
         &mut self,
         shared: Arc<SharedState>,
         supervisor: Thread,
-    ) -> Result<(Self::Stream, Self::DeviceToken), BackendFailure> {
+    ) -> Result<(Self::Stream, Self::DeviceToken, StreamGeneration), BackendFailure> {
         let device = self.host.default_output_device().ok_or(BackendFailure)?;
         let supported_configs = device
             .supported_output_configs()
@@ -151,24 +225,26 @@ impl OutputBackend for CpalBackend {
         let device_token = device.id().map_err(|_| BackendFailure)?;
         let sample_format = selected.sample_format();
         let base_config = selected.config();
+        let callback_shared = shared.clone();
+        let (stream, generation) = open_with_buffer_preferences(
+            &shared,
+            &mut self.generations,
+            |buffer_size, generation| {
+                let mut config = base_config;
+                config.buffer_size = buffer_size;
+                build_stream_for_format(
+                    &device,
+                    sample_format,
+                    config,
+                    callback_shared.clone(),
+                    supervisor.clone(),
+                    generation,
+                )
+            },
+            |stream| stream.play().map_err(|_| BackendFailure),
+        )?;
 
-        for buffer_size in buffer_preferences() {
-            let mut config = base_config;
-            config.buffer_size = buffer_size;
-            if let Ok(stream) = build_stream_for_format(
-                &device,
-                sample_format,
-                config,
-                shared.clone(),
-                supervisor.clone(),
-            ) {
-                if stream.play().is_ok() {
-                    return Ok((stream, device_token));
-                }
-            }
-        }
-
-        Err(BackendFailure)
+        Ok((stream, device_token, generation))
     }
 }
 
@@ -183,6 +259,7 @@ pub(crate) struct OutputSupervisor<B: OutputBackend> {
     shared: Arc<SharedState>,
     recovery: RecoveryController,
     stream: Option<B::Stream>,
+    stream_generation: Option<StreamGeneration>,
     device_token: Option<B::DeviceToken>,
     next_device_check: Duration,
 }
@@ -194,6 +271,7 @@ impl<B: OutputBackend> OutputSupervisor<B> {
             shared,
             recovery: RecoveryController::new(now),
             stream: None,
+            stream_generation: None,
             device_token: None,
             next_device_check: now,
         }
@@ -202,6 +280,7 @@ impl<B: OutputBackend> OutputSupervisor<B> {
     pub(crate) fn step(&mut self, now: Duration, current_thread: Thread) -> SupervisorStep {
         if self.shared.shutdown.load(Ordering::Acquire) {
             self.stream = None;
+            self.stream_generation = None;
             self.device_token = None;
             self.shared.clear_commands();
             self.recovery.stop();
@@ -209,8 +288,15 @@ impl<B: OutputBackend> OutputSupervisor<B> {
             return SupervisorStep::Stop;
         }
 
-        if self.shared.stream_failed.swap(false, Ordering::AcqRel) && self.stream.is_some() {
+        let failed_generation = NonZeroU64::new(
+            self.shared
+                .stream_failure_generation
+                .swap(0, Ordering::AcqRel),
+        )
+        .map(StreamGeneration);
+        if self.stream.is_some() && failed_generation == self.stream_generation {
             self.stream = None;
+            self.stream_generation = None;
             self.device_token = None;
             self.shared.clear_commands();
             self.recovery.stream_lost(now);
@@ -224,6 +310,7 @@ impl<B: OutputBackend> OutputSupervisor<B> {
             };
             if device_changed {
                 self.stream = None;
+                self.stream_generation = None;
                 self.device_token = None;
                 self.shared.clear_commands();
                 self.recovery.stream_lost(now);
@@ -237,8 +324,9 @@ impl<B: OutputBackend> OutputSupervisor<B> {
                 .backend
                 .open_default_stream(Arc::clone(&self.shared), current_thread)
             {
-                Ok((stream, token)) => {
+                Ok((stream, token, generation)) => {
                     self.stream = Some(stream);
+                    self.stream_generation = Some(generation);
                     self.device_token = Some(token);
                     self.recovery.opened();
                     self.next_device_check = now.saturating_add(DEVICE_CHECK_INTERVAL);
@@ -327,12 +415,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shutdown_during_first_failed_build_prevents_later_attempts() {
+        let shared = SharedState::new();
+        let mut generations = StreamGenerationCounter::new();
+        let mut attempts = Vec::new();
+        let mut plays = 0;
+
+        let result = open_with_buffer_preferences(
+            &shared,
+            &mut generations,
+            |buffer_size, _| {
+                attempts.push(buffer_size);
+                shared.shutdown.store(true, Ordering::Release);
+                Err::<(), _>(BackendFailure)
+            },
+            |_| {
+                plays += 1;
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(BackendFailure));
+        assert_eq!(attempts, [BufferSize::Fixed(128)]);
+        assert_eq!(plays, 0);
+    }
+
+    #[test]
+    fn shutdown_during_successful_build_prevents_play() {
+        let shared = SharedState::new();
+        let mut generations = StreamGenerationCounter::new();
+        let mut attempts = Vec::new();
+        let mut plays = 0;
+
+        let result = open_with_buffer_preferences(
+            &shared,
+            &mut generations,
+            |buffer_size, _| {
+                attempts.push(buffer_size);
+                shared.shutdown.store(true, Ordering::Release);
+                Ok(())
+            },
+            |_| {
+                plays += 1;
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(BackendFailure));
+        assert_eq!(attempts, [BufferSize::Fixed(128)]);
+        assert_eq!(plays, 0);
+    }
+
+    #[test]
+    fn generation_exhaustion_never_wraps_to_the_no_signal_sentinel() {
+        let mut generations = StreamGenerationCounter {
+            next: std::num::NonZeroU64::new(u64::MAX),
+        };
+
+        assert_eq!(generations.next().unwrap().get(), u64::MAX);
+        assert_eq!(generations.next(), Err(BackendFailure));
+    }
+
     #[derive(Default)]
     struct FakeBackend {
         opens: VecDeque<Result<(FakeStream, u64), BackendFailure>>,
         default_outcomes: VecDeque<Result<Option<u64>, BackendFailure>>,
         default_id: Option<u64>,
         open_count: usize,
+        generations: StreamGenerationCounter,
     }
 
     struct FakeStream;
@@ -351,10 +502,18 @@ mod tests {
             &mut self,
             _shared: Arc<SharedState>,
             _supervisor: std::thread::Thread,
-        ) -> Result<(Self::Stream, Self::DeviceToken), BackendFailure> {
+        ) -> Result<(Self::Stream, Self::DeviceToken, StreamGeneration), BackendFailure> {
             self.open_count += 1;
-            self.opens.pop_front().unwrap_or(Err(BackendFailure))
+            let generation = self.generations.next()?;
+            self.opens
+                .pop_front()
+                .unwrap_or(Err(BackendFailure))
+                .map(|(stream, token)| (stream, token, generation))
         }
+    }
+
+    fn generation(value: u64) -> StreamGeneration {
+        StreamGeneration(NonZeroU64::new(value).unwrap())
     }
 
     #[test]
@@ -391,9 +550,41 @@ mod tests {
         backend.default_id = Some(1);
         let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
         supervisor.step(Duration::ZERO, std::thread::current());
-        shared.stream_failed.store(true, Ordering::Release);
+        let active_generation = supervisor.stream_generation.unwrap();
+        report_stream_failure(&shared, active_generation);
         supervisor.step(Duration::from_secs(1), std::thread::current());
         assert!(shared.commands.is_empty());
+        assert_eq!(shared.status(), AudioEngineStatus::Ready);
+    }
+
+    #[test]
+    fn stale_stream_failure_does_not_replace_the_current_stream() {
+        let shared = Arc::new(SharedState::new());
+        let mut backend = FakeBackend::default();
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.opens.push_back(Ok((FakeStream, 1)));
+        backend.default_id = Some(1);
+        let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
+
+        supervisor.step(Duration::ZERO, std::thread::current());
+        let old_generation = supervisor.stream_generation.unwrap();
+        report_stream_failure(&shared, old_generation);
+        supervisor.step(Duration::from_millis(1), std::thread::current());
+        assert_eq!(supervisor.backend.open_count, 2);
+        let active_generation = supervisor.stream_generation.unwrap();
+
+        report_stream_failure(&shared, old_generation);
+        supervisor.step(Duration::from_millis(2), std::thread::current());
+
+        assert_eq!(supervisor.backend.open_count, 2);
+        assert_eq!(shared.status(), AudioEngineStatus::Ready);
+
+        report_stream_failure(&shared, active_generation);
+        report_stream_failure(&shared, old_generation);
+        supervisor.step(Duration::from_millis(3), std::thread::current());
+
+        assert_eq!(supervisor.backend.open_count, 3);
         assert_eq!(shared.status(), AudioEngineStatus::Ready);
     }
 
@@ -406,7 +597,7 @@ mod tests {
         let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
 
         supervisor.step(Duration::ZERO, std::thread::current());
-        shared.stream_failed.store(true, Ordering::Release);
+        report_stream_failure(&shared, generation(1));
         supervisor.step(Duration::from_millis(50), std::thread::current());
 
         assert_eq!(supervisor.backend.open_count, 1);
@@ -434,7 +625,8 @@ mod tests {
         let mut supervisor = OutputSupervisor::new(backend, shared.clone(), Duration::ZERO);
 
         supervisor.step(Duration::ZERO, std::thread::current());
-        shared.stream_failed.store(true, Ordering::Release);
+        let active_generation = supervisor.stream_generation.unwrap();
+        report_stream_failure(&shared, active_generation);
         supervisor.step(Duration::from_millis(1), std::thread::current());
         handle.play(id).unwrap();
         assert_eq!(shared.commands.len(), 1);

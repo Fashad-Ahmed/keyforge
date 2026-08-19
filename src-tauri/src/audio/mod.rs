@@ -1,7 +1,7 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering},
         Arc, Mutex,
     },
 };
@@ -142,7 +142,7 @@ pub(crate) struct SharedState {
     master_volume: AtomicU32,
     status: AtomicU8,
     shutdown: AtomicBool,
-    stream_failed: AtomicBool,
+    stream_failure_generation: AtomicU64,
 }
 
 #[allow(dead_code)]
@@ -154,7 +154,7 @@ impl SharedState {
             master_volume: AtomicU32::new(1.0_f32.to_bits()),
             status: AtomicU8::new(AudioEngineStatus::Starting as u8),
             shutdown: AtomicBool::new(false),
-            stream_failed: AtomicBool::new(false),
+            stream_failure_generation: AtomicU64::new(0),
         }
     }
 
@@ -319,7 +319,14 @@ mod tests {
             &mut self,
             _shared: Arc<SharedState>,
             _supervisor: std::thread::Thread,
-        ) -> Result<(Self::Stream, Self::DeviceToken), cpal_output::BackendFailure> {
+        ) -> Result<
+            (
+                Self::Stream,
+                Self::DeviceToken,
+                cpal_output::StreamGeneration,
+            ),
+            cpal_output::BackendFailure,
+        > {
             Err(cpal_output::BackendFailure)
         }
     }
