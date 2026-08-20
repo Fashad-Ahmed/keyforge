@@ -31,5 +31,9 @@
 - locked dependencies
 - protected review workflow
 - automated tests and static analysis
+- bounded decoded-PCM registry memory
+- bounded playback commands and 32 mixer voices
+- allocation-free audio callback work
+- private Rust-side output-device recovery without IPC exposure
 
 Later milestones must add concrete pack parser limits, dependency review, SBOM, provenance, artifact scanning, and signing.

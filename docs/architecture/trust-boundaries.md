@@ -22,6 +22,10 @@ All pack files are untrusted input.
 
 The pack manager must validate paths, file types, sizes, metadata, and audio decoding before use.
 
-## Boundary 5: Build System → Release Artifact
+## Boundary 5: Future Pack Manager → Audio Registry
+
+The future pack manager may pass only validated, decoded PCM into the native audio registry. Encoded audio bytes and file-system paths never reach the engine.
+
+## Boundary 6: Build System → Release Artifact
 
 Release artifacts must come from controlled CI and later milestones will add checksums, SBOMs, provenance, malware scanning, and platform signing.
