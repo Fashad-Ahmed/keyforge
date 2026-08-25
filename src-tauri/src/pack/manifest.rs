@@ -308,10 +308,6 @@ fn validate_sound_map(raw: RawSoundMap) -> Result<SoundMap<CanonicalSoundPath>, 
 }
 
 fn validate_display_name(value: &str) -> Result<(), PackManifestError> {
-    let value = value.trim();
-    if value.is_empty() || value.chars().count() > 80 {
-        return Err(PackManifestError::Name);
-    }
     if value.chars().any(|character| {
         character.is_control()
             || matches!(
@@ -319,6 +315,10 @@ fn validate_display_name(value: &str) -> Result<(), PackManifestError> {
                 '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
             )
     }) {
+        return Err(PackManifestError::Name);
+    }
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 80 {
         return Err(PackManifestError::Name);
     }
     Ok(())
@@ -352,7 +352,10 @@ fn parse_version_component(value: Option<&str>) -> Result<u32, PackManifestError
     let Some(value) = value else {
         return Err(PackManifestError::Version);
     };
-    if value.is_empty() || (value != "0" && value.starts_with('0')) {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value != "0" && value.starts_with('0'))
+    {
         return Err(PackManifestError::Version);
     }
     value.parse().map_err(|_| PackManifestError::Version)
@@ -375,16 +378,36 @@ mod tests {
 
     #[test]
     fn rejects_unknown_duplicate_and_missing_fields() {
+        let duplicate_root = String::from_utf8(valid_manifest_json()).unwrap().replace(
+            "\"schema_version\": 1,",
+            "\"schema_version\": 1, \"schema_version\": 1,",
+        );
         assert_eq!(
-            parse_manifest(br#"{"schema_version":1,"schema_version":1}"#),
+            parse_manifest(duplicate_root.as_bytes()),
             Err(PackManifestError::Json)
         );
-        let unknown = String::from_utf8(valid_manifest_json()).unwrap().replace(
+        let duplicate_group = String::from_utf8(valid_manifest_json()).unwrap().replace(
+            "\"normal\": [\"sounds/normal-01.wav\", \"sounds/normal-02.wav\"],",
+            "\"normal\": [\"sounds/normal-01.wav\"], \"normal\": [\"sounds/normal-02.wav\"],",
+        );
+        assert_eq!(
+            parse_manifest(duplicate_group.as_bytes()),
+            Err(PackManifestError::Json)
+        );
+        let unknown_root = String::from_utf8(valid_manifest_json()).unwrap().replace(
             "\"schema_version\": 1,",
             "\"schema_version\": 1, \"script\": \"run.sh\",",
         );
         assert_eq!(
-            parse_manifest(unknown.as_bytes()),
+            parse_manifest(unknown_root.as_bytes()),
+            Err(PackManifestError::Json)
+        );
+        let unknown_group = String::from_utf8(valid_manifest_json()).unwrap().replace(
+            "\"normal\": [\"sounds/normal-01.wav\", \"sounds/normal-02.wav\"],",
+            "\"normal\": [\"sounds/normal-01.wav\", \"sounds/normal-02.wav\"], \"script\": [],",
+        );
+        assert_eq!(
+            parse_manifest(unknown_group.as_bytes()),
             Err(PackManifestError::Json)
         );
         assert_eq!(parse_manifest(br#"{}"#), Err(PackManifestError::Json));
@@ -395,7 +418,16 @@ mod tests {
         for id in ["", "Upper", "-leading", "trailing-", "con", "com1"] {
             assert_eq!(PackId::parse(id), Err(PackManifestError::Id));
         }
-        for version in ["1", "1.0", "01.0.0", "1.0.0-beta", "4294967296.0.0"] {
+        for version in [
+            "1",
+            "1.0",
+            "01.0.0",
+            "1.0.0-beta",
+            "4294967296.0.0",
+            "+1.0.0",
+            "1.+0.0",
+            "1.0.+0",
+        ] {
             assert_eq!(PackVersion::parse(version), Err(PackManifestError::Version));
         }
         for name in ["", "  ", "line\nbreak", "unsafe\u{202e}name"] {
@@ -418,6 +450,52 @@ mod tests {
             assert_eq!(
                 CanonicalSoundPath::parse(path),
                 Err(PackManifestError::SoundPath)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_display_name_controls_at_the_edges_through_manifest_parsing() {
+        for name in ["\nPack", "Pack\n", "\u{2028}Pack", "Pack\u{2029}"] {
+            let json_name = serde_json::to_string(name).unwrap();
+            let manifest = String::from_utf8(valid_manifest_json()).unwrap().replace(
+                "\"name\": \"KeyForge Mechanical\"",
+                &format!("\"name\": {json_name}"),
+            );
+            assert_eq!(
+                parse_manifest(manifest.as_bytes()),
+                Err(PackManifestError::Name)
+            );
+        }
+    }
+
+    #[test]
+    fn enforces_manifest_byte_limit_at_the_exact_boundary() {
+        let valid = valid_manifest_json();
+        let mut at_limit = valid.clone();
+        at_limit.extend(std::iter::repeat_n(
+            b' ',
+            MANIFEST_LIMIT_BYTES - at_limit.len(),
+        ));
+        assert_eq!(at_limit.len(), MANIFEST_LIMIT_BYTES);
+        assert!(parse_manifest(&at_limit).is_ok());
+
+        let mut too_large = at_limit;
+        too_large.push(b' ');
+        assert_eq!(too_large.len(), MANIFEST_LIMIT_BYTES + 1);
+        assert_eq!(parse_manifest(&too_large), Err(PackManifestError::TooLarge));
+    }
+
+    #[test]
+    fn enforces_sound_stem_length_boundaries() {
+        for (stem, expected) in [
+            ("a".to_string(), Ok(())),
+            ("a".repeat(64), Ok(())),
+            ("a".repeat(65), Err(PackManifestError::SoundPath)),
+        ] {
+            assert_eq!(
+                CanonicalSoundPath::parse(&format!("sounds/{stem}.wav")).map(|_| ()),
+                expected
             );
         }
     }
@@ -517,6 +595,58 @@ mod tests {
         assert_eq!(
             parse_manifest(too_many_total.as_bytes()),
             Err(PackManifestError::TooManySamples)
+        );
+    }
+
+    #[test]
+    fn accepts_the_exact_group_and_total_reference_limits() {
+        let group = |prefix: &str, count: usize| {
+            (1..=count)
+                .map(|index| format!("\"sounds/{prefix}-{index}.wav\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let manifest = format!(
+            r#"{{"schema_version":1,"id":"pack","name":"Pack","pack_version":"1.0.0","sounds":{{"normal":[{}],"space":[{}],"enter":[{}],"backspace":[{}],"modifier":[{}]}}}}"#,
+            group("normal", 16),
+            group("space", 16),
+            group("enter", 16),
+            group("backspace", 15),
+            group("modifier", 1)
+        );
+        let parsed = parse_manifest(manifest.as_bytes()).unwrap();
+        assert_eq!(parsed.sounds().normal().len(), 16);
+        assert_eq!(parsed.sounds().space().len(), 16);
+        assert_eq!(parsed.sounds().enter().len(), 16);
+        assert_eq!(parsed.sounds().backspace().len(), 15);
+        assert_eq!(parsed.sounds().modifier().len(), 1);
+        assert_eq!(parsed.sounds().total_len(), 64);
+    }
+
+    #[test]
+    fn sound_map_iteration_and_mapping_use_fixed_group_order() {
+        let sounds = SoundMap {
+            normal: vec![1, 2],
+            space: vec![3],
+            enter: vec![4],
+            backspace: vec![5],
+            modifier: vec![6],
+        };
+        assert_eq!(
+            sounds.iter().copied().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6]
+        );
+        let mapped = sounds
+            .clone()
+            .try_map(|value| Ok::<_, ()>(value * 10))
+            .unwrap();
+        assert_eq!(
+            mapped.into_iter().collect::<Vec<_>>(),
+            vec![10, 20, 30, 40, 50, 60]
+        );
+        assert_eq!(
+            sounds.into_iter().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6]
         );
     }
 
