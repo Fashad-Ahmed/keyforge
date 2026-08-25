@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+mod decoder;
 mod manifest;
 
 #[cfg(test)]
