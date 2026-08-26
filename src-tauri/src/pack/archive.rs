@@ -1,13 +1,18 @@
 use std::{
     collections::HashSet,
     fmt,
-    io::{Cursor, Read, Seek},
+    io::{Cursor, Read, Seek, SeekFrom},
     str,
 };
 
 use zip::{CompressionMethod, ZipArchive};
 
-use super::CanonicalSoundPath;
+use super::{
+    decoder::{decode_wav, DecodedAudio},
+    manifest::MANIFEST_LIMIT_BYTES,
+    parse_manifest, CanonicalSoundPath, PackDecodeError, PackInstallError, PackManifestError,
+    ValidatedPack, MAX_DECODED_PACK_BYTES,
+};
 
 pub const MAX_ARCHIVE_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_ARCHIVE_ENTRIES: usize = 128;
@@ -250,6 +255,81 @@ pub(crate) fn read_entry_bounded<R: Read + Seek>(
         return Err(PackArchiveError::SizeMismatch);
     }
     Ok(output)
+}
+
+pub(crate) fn validate_archive<R: Read + Seek>(
+    mut reader: R,
+    source_size: u64,
+) -> Result<ValidatedPack, PackInstallError> {
+    let inventory = inspect_archive(&mut reader, source_size)?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| PackArchiveError::Invalid)?;
+    let mut archive = ZipArchive::new(reader).map_err(|_| PackArchiveError::Invalid)?;
+
+    let manifest_entry = inventory
+        .entry("manifest.json")
+        .ok_or(PackArchiveError::MissingManifest)?;
+    let manifest_bytes =
+        read_entry_bounded(&mut archive, manifest_entry, MANIFEST_LIMIT_BYTES as u64)?;
+    let mut expanded_bytes = account_expanded_bytes(0, manifest_bytes.len() as u64)?;
+    let manifest = parse_manifest(&manifest_bytes)?;
+
+    let references = manifest
+        .sounds()
+        .iter()
+        .map(CanonicalSoundPath::as_str)
+        .collect::<HashSet<_>>();
+    let wav_paths = inventory
+        .wav_entries()
+        .iter()
+        .map(ArchiveEntry::name)
+        .collect::<HashSet<_>>();
+    if references.iter().any(|path| !wav_paths.contains(path)) {
+        return Err(PackManifestError::MissingReference.into());
+    }
+    if wav_paths.iter().any(|path| !references.contains(path)) {
+        return Err(PackManifestError::UnreferencedFile.into());
+    }
+
+    let mut decoded_bytes = 0_usize;
+    let sounds = manifest.sounds().clone().try_map(|path| {
+        let entry = inventory
+            .entry(path.as_str())
+            .ok_or(PackManifestError::MissingReference)?;
+        let wav_bytes = read_entry_bounded(&mut archive, entry, MAX_WAV_ENTRY_BYTES)?;
+        expanded_bytes = account_expanded_bytes(expanded_bytes, wav_bytes.len() as u64)?;
+        let decoded = decode_wav(&wav_bytes)?;
+        decoded_bytes = account_decoded_bytes(decoded_bytes, &decoded)?;
+        Ok::<_, PackInstallError>(decoded)
+    })?;
+
+    Ok(ValidatedPack {
+        manifest,
+        sounds,
+        expanded_bytes,
+        decoded_bytes,
+    })
+}
+
+fn account_expanded_bytes(total: u64, actual: u64) -> Result<u64, PackArchiveError> {
+    let total = total
+        .checked_add(actual)
+        .ok_or(PackArchiveError::ExpandedTooLarge)?;
+    if total > MAX_EXPANDED_BYTES {
+        return Err(PackArchiveError::ExpandedTooLarge);
+    }
+    Ok(total)
+}
+
+fn account_decoded_bytes(total: usize, decoded: &DecodedAudio) -> Result<usize, PackDecodeError> {
+    let total = total
+        .checked_add(decoded.sample().byte_len())
+        .ok_or(PackDecodeError::DecodedMemory)?;
+    if total > MAX_DECODED_PACK_BYTES {
+        return Err(PackDecodeError::DecodedMemory);
+    }
+    Ok(total)
 }
 
 fn validate_raw_names(entries: &[RawEntry]) -> Result<(), PackArchiveError> {
@@ -578,9 +658,113 @@ mod tests {
         corrupt_central_signature, corrupt_data_descriptor_expanded_size, find_eocd,
         mutate_entry_compression, mutate_entry_flags, mutate_entry_name, mutate_entry_sizes,
         mutate_entry_unix_mode, mutate_eocd_disk_markers, overwrite_le_u32,
-        physically_truncate_central_directory_record, single_entry_zip, valid_manifest_json,
-        valid_pack_entries, zip_with_entries, zip_with_entries_and_comments, zip_with_extra_name,
+        pack_with_decoded_bytes, physically_truncate_central_directory_record, single_entry_zip,
+        valid_manifest_json, valid_pack_entries, valid_pack_zip, wav_bytes,
+        zip_missing_referenced_wav, zip_with_bad_late_wav, zip_with_duplicate_manifest_reference,
+        zip_with_entries, zip_with_entries_and_comments, zip_with_extra_name,
+        zip_with_unreferenced_wav,
     };
+    use crate::pack::{
+        decoder::{decode_wav, PackDecodeError},
+        PackManifestError,
+    };
+
+    #[test]
+    fn validates_every_reference_and_decodes_every_group() {
+        let bytes = valid_pack_zip();
+        let pack = validate_archive(Cursor::new(bytes.clone()), bytes.len() as u64).unwrap();
+        assert_eq!(pack.manifest().id().as_str(), "keyforge-mechanical");
+        assert_eq!(pack.sounds().normal().len(), 2);
+        assert_eq!(pack.sounds().total_len(), 6);
+        assert_eq!(pack.decoded_bytes(), 24);
+        assert_eq!(
+            pack.expanded_bytes(),
+            valid_pack_entries()
+                .iter()
+                .map(|(_, contents)| contents.len() as u64)
+                .sum::<u64>()
+        );
+
+        let first_values = pack
+            .sounds()
+            .iter()
+            .map(|audio| audio.sample().samples()[0])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            first_values,
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0].map(|value| value / 32_768.0)
+        );
+    }
+
+    #[test]
+    fn rejects_missing_extra_and_duplicate_references() {
+        assert_eq!(
+            validate_test_zip(zip_missing_referenced_wav()),
+            Err(PackInstallError::Manifest(
+                PackManifestError::MissingReference
+            ))
+        );
+        assert_eq!(
+            validate_test_zip(zip_with_unreferenced_wav()),
+            Err(PackInstallError::Manifest(
+                PackManifestError::UnreferencedFile
+            ))
+        );
+        assert_eq!(
+            validate_test_zip(zip_with_duplicate_manifest_reference()),
+            Err(PackInstallError::Manifest(
+                PackManifestError::DuplicateReference
+            ))
+        );
+    }
+
+    #[test]
+    fn returns_no_decoded_pack_when_the_last_wav_fails() {
+        assert_eq!(
+            validate_test_zip(zip_with_bad_late_wav()),
+            Err(PackInstallError::Decode(PackDecodeError::Container))
+        );
+    }
+
+    #[test]
+    fn decoded_memory_limit_uses_actual_f32_storage() {
+        let bytes = pack_with_decoded_bytes(MAX_DECODED_PACK_BYTES + 4);
+        assert!(bytes.len() as u64 <= MAX_ARCHIVE_BYTES);
+        assert_eq!(
+            validate_test_zip(bytes),
+            Err(PackInstallError::Decode(PackDecodeError::DecodedMemory))
+        );
+    }
+
+    #[test]
+    fn aggregate_accounting_rejects_integer_overflow() {
+        let decoded = decode_wav(&wav_bytes(1, 48_000, &[1])).unwrap();
+        assert_eq!(account_decoded_bytes(0, &decoded), Ok(4));
+        assert_eq!(
+            account_decoded_bytes(usize::MAX - 3, &decoded),
+            Err(PackDecodeError::DecodedMemory)
+        );
+        assert_eq!(
+            account_expanded_bytes(u64::MAX, 1),
+            Err(PackArchiveError::ExpandedTooLarge)
+        );
+    }
+
+    #[test]
+    fn top_level_error_text_is_sanitized() {
+        assert_eq!(
+            PackInstallError::Archive(PackArchiveError::Path).to_string(),
+            "sound-pack installation failed: archive"
+        );
+        assert_eq!(
+            PackInstallError::Manifest(PackManifestError::Json).to_string(),
+            "sound-pack installation failed: manifest"
+        );
+        assert_eq!(
+            PackInstallError::Decode(PackDecodeError::Container).to_string(),
+            "sound-pack installation failed: decode"
+        );
+    }
 
     #[test]
     fn inventories_stored_and_deflated_canonical_layouts() {
@@ -1033,6 +1217,10 @@ mod tests {
 
     fn inspect(bytes: &[u8]) -> Result<ArchiveInventory, PackArchiveError> {
         inspect_archive(Cursor::new(bytes), bytes.len() as u64)
+    }
+
+    fn validate_test_zip(bytes: Vec<u8>) -> Result<ValidatedPack, PackInstallError> {
+        validate_archive(Cursor::new(bytes.clone()), bytes.len() as u64)
     }
 
     struct LyingLengthReader {

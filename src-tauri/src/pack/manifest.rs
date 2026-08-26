@@ -219,6 +219,8 @@ pub enum PackManifestError {
     TooManySamples,
     SoundPath,
     DuplicateReference,
+    MissingReference,
+    UnreferencedFile,
 }
 
 impl fmt::Display for PackManifestError {

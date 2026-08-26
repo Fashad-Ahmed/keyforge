@@ -99,6 +99,122 @@ pub(crate) fn valid_pack_entries() -> Vec<(String, Vec<u8>)> {
     ]
 }
 
+pub(crate) fn valid_pack_zip() -> Vec<u8> {
+    zip_with_entries(CompressionMethod::Stored, valid_pack_entries())
+}
+
+pub(crate) fn zip_missing_referenced_wav() -> Vec<u8> {
+    let mut entries = valid_pack_entries();
+    entries.retain(|(name, _)| name != "sounds/normal-02.wav");
+    zip_with_entries(CompressionMethod::Stored, entries)
+}
+
+pub(crate) fn zip_with_unreferenced_wav() -> Vec<u8> {
+    let mut entries = valid_pack_entries();
+    entries.push((
+        "sounds/unreferenced.wav".to_owned(),
+        wav_bytes(1, 48_000, &[7]),
+    ));
+    zip_with_entries(CompressionMethod::Stored, entries)
+}
+
+pub(crate) fn zip_with_duplicate_manifest_reference() -> Vec<u8> {
+    let mut entries = valid_pack_entries();
+    entries[0].1 = String::from_utf8(entries[0].1.clone())
+        .unwrap()
+        .replace("sounds/enter-01.wav", "sounds/space-01.wav")
+        .into_bytes();
+    zip_with_entries(CompressionMethod::Stored, entries)
+}
+
+pub(crate) fn zip_with_bad_late_wav() -> Vec<u8> {
+    let mut entries = valid_pack_entries();
+    entries
+        .iter_mut()
+        .find(|(name, _)| name == "sounds/modifier-01.wav")
+        .unwrap()
+        .1 = b"not a RIFF/WAVE file".to_vec();
+    zip_with_entries(CompressionMethod::Stored, entries)
+}
+
+pub(crate) fn pack_with_decoded_bytes(decoded_bytes: usize) -> Vec<u8> {
+    assert_eq!(decoded_bytes % std::mem::size_of::<f32>(), 0);
+    let mut remaining_samples = decoded_bytes / std::mem::size_of::<f32>();
+    let mut wavs = Vec::new();
+    while remaining_samples > 0 {
+        let (channels, sample_count) = if remaining_samples > 192_000 {
+            (2, remaining_samples.min(384_000) & !1)
+        } else {
+            (1, remaining_samples)
+        };
+        assert!(sample_count > 0);
+        let index = wavs.len();
+        let mut state = 0x9e37_79b9_u32 ^ index as u32;
+        let samples = (0..sample_count)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (state & 0x0f) as i16
+            })
+            .collect::<Vec<_>>();
+        wavs.push((channels, samples));
+        remaining_samples -= sample_count;
+    }
+    assert!(wavs.len() <= 64);
+    assert!(wavs.len() >= 5);
+
+    let group_sizes = distribute_across_groups(wavs.len());
+    let group_names = ["normal", "space", "enter", "backspace", "modifier"];
+    let mut entries = Vec::with_capacity(wavs.len() + 1);
+    let mut paths = Vec::with_capacity(wavs.len());
+    let mut wav_index = 0;
+    for (group, group_size) in group_names.into_iter().zip(group_sizes) {
+        let mut group_paths = Vec::with_capacity(group_size);
+        for variant in 1..=group_size {
+            let path = format!("sounds/{group}-{variant:02}.wav");
+            let (channels, samples) = &wavs[wav_index];
+            entries.push((path.clone(), wav_bytes(*channels, 96_000, samples)));
+            group_paths.push(path);
+            wav_index += 1;
+        }
+        paths.push(group_paths);
+    }
+    entries.insert(0, ("manifest.json".to_owned(), manifest_for_groups(&paths)));
+    zip_with_entries(CompressionMethod::Deflated, entries)
+}
+
+fn distribute_across_groups(total: usize) -> [usize; 5] {
+    let mut sizes = [1; 5];
+    let mut remaining = total - sizes.len();
+    for size in &mut sizes {
+        let addition = remaining.min(15);
+        *size += addition;
+        remaining -= addition;
+    }
+    assert_eq!(remaining, 0);
+    sizes
+}
+
+fn manifest_for_groups(groups: &[Vec<String>]) -> Vec<u8> {
+    let json_array = |paths: &[String]| {
+        paths
+            .iter()
+            .map(|path| format!("\"{path}\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        r#"{{"schema_version":1,"id":"decoded-limit","name":"Decoded Limit","pack_version":"1.0.0","sounds":{{"normal":[{}],"space":[{}],"enter":[{}],"backspace":[{}],"modifier":[{}]}}}}"#,
+        json_array(&groups[0]),
+        json_array(&groups[1]),
+        json_array(&groups[2]),
+        json_array(&groups[3]),
+        json_array(&groups[4]),
+    )
+    .into_bytes()
+}
+
 pub(crate) fn zip_with_entries(
     compression: CompressionMethod,
     entries: Vec<(String, Vec<u8>)>,
