@@ -225,6 +225,25 @@ pub(crate) fn add_data_descriptor(mut bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
+pub(crate) fn add_signatureless_data_descriptor_with_magic_crc(bytes: Vec<u8>) -> Vec<u8> {
+    let mut bytes = add_data_descriptor(bytes);
+    let central_before = central_offsets(&bytes)[0];
+    let local = le_u32(&bytes, central_before + 42) as usize;
+    let name_len = le_u16(&bytes, local + 26) as usize;
+    let extra_len = le_u16(&bytes, local + 28) as usize;
+    let descriptor =
+        local + 30 + name_len + extra_len + le_u32(&bytes, central_before + 20) as usize;
+    assert_eq!(le_u32(&bytes, descriptor), 0x0807_4b50);
+
+    bytes.drain(descriptor..descriptor + 4);
+    let central = central_before - 4;
+    overwrite_le_u32(&mut bytes, descriptor, 0x0807_4b50);
+    overwrite_le_u32(&mut bytes, central + 16, 0x0807_4b50);
+    let eocd = find_eocd(&bytes);
+    overwrite_le_u32(&mut bytes, eocd + 16, central as u32);
+    bytes
+}
+
 pub(crate) fn corrupt_data_descriptor_expanded_size(bytes: &mut [u8], expanded: u32) {
     let central = central_offsets(bytes)[0];
     let local = le_u32(bytes, central + 42) as usize;
@@ -244,6 +263,16 @@ pub(crate) fn mutate_eocd_disk_markers(bytes: &mut [u8], disk: u16, central_disk
 pub(crate) fn corrupt_central_signature(bytes: &mut [u8]) {
     let central = central_offsets(bytes)[0];
     bytes[central] ^= 0xff;
+}
+
+pub(crate) fn physically_truncate_central_directory_record(mut bytes: Vec<u8>) -> Vec<u8> {
+    let eocd = find_eocd(&bytes);
+    let central_size = le_u32(&bytes, eocd + 12);
+    assert!(central_size > 0);
+    bytes.remove(eocd - 1);
+    let eocd = find_eocd(&bytes);
+    overwrite_le_u32(&mut bytes, eocd + 12, central_size - 1);
+    bytes
 }
 
 pub(crate) fn central_offsets(bytes: &[u8]) -> Vec<usize> {

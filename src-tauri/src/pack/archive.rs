@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fmt,
-    io::{Read, Seek, SeekFrom},
+    io::{Cursor, Read, Seek},
     str,
 };
 
@@ -109,38 +109,28 @@ enum EntryKind {
 }
 
 pub(crate) fn inspect_archive<R: Read + Seek>(
-    mut reader: R,
+    reader: R,
     source_size: u64,
 ) -> Result<ArchiveInventory, PackArchiveError> {
     if source_size > MAX_ARCHIVE_BYTES {
         return Err(PackArchiveError::TooLarge);
     }
 
-    let actual_size = reader
-        .seek(SeekFrom::End(0))
-        .map_err(|_| PackArchiveError::Invalid)?;
-    if actual_size > MAX_ARCHIVE_BYTES {
-        return Err(PackArchiveError::TooLarge);
-    }
-    let capacity = usize::try_from(actual_size).map_err(|_| PackArchiveError::TooLarge)?;
-    reader
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| PackArchiveError::Invalid)?;
+    let capacity = usize::try_from(source_size).map_err(|_| PackArchiveError::TooLarge)?;
     let mut raw_bytes = Vec::with_capacity(capacity);
     reader
+        .take(MAX_ARCHIVE_BYTES + 1)
         .read_to_end(&mut raw_bytes)
         .map_err(|_| PackArchiveError::Invalid)?;
-    if raw_bytes.len() != capacity {
-        return Err(PackArchiveError::Invalid);
+    if raw_bytes.len() as u64 > MAX_ARCHIVE_BYTES {
+        return Err(PackArchiveError::TooLarge);
     }
 
     let raw_entries = preflight_zip_structure(&raw_bytes)?;
     validate_raw_names(&raw_entries)?;
 
-    reader
-        .seek(SeekFrom::Start(0))
+    let mut archive = ZipArchive::new(Cursor::new(raw_bytes.as_slice()))
         .map_err(|_| PackArchiveError::Invalid)?;
-    let mut archive = ZipArchive::new(reader).map_err(|_| PackArchiveError::Invalid)?;
     if archive.len() != raw_entries.len() {
         return Err(PackArchiveError::Invalid);
     }
@@ -232,6 +222,9 @@ pub(crate) fn read_entry_bounded<R: Read + Seek>(
     entry: &ArchiveEntry,
     runtime_limit: u64,
 ) -> Result<Vec<u8>, PackArchiveError> {
+    if entry.expanded_size > runtime_limit {
+        return Err(PackArchiveError::SizeMismatch);
+    }
     let mut file = archive
         .by_index(entry.index)
         .map_err(|_| PackArchiveError::Read)?;
@@ -499,28 +492,37 @@ fn validate_data_descriptor(
     entry: &RawEntry,
     central_start: usize,
 ) -> Result<usize, PackArchiveError> {
-    let signature = read_u32(bytes, data_end)?;
-    let (descriptor_start, descriptor_len) = if signature == DATA_DESCRIPTOR_SIGNATURE {
-        (data_end + 4, 16)
-    } else {
-        (data_end, 12)
-    };
-    let crc = read_u32(bytes, descriptor_start)?;
-    let compressed = read_u32(bytes, descriptor_start + 4)?;
-    let expanded = read_u32(bytes, descriptor_start + 8)?;
-    if crc != entry.crc32
-        || u64::from(compressed) != entry.compressed_size
-        || u64::from(expanded) != entry.expanded_size
-    {
-        return Err(PackArchiveError::SizeMismatch);
+    if read_u32(bytes, data_end)? == DATA_DESCRIPTOR_SIGNATURE {
+        let values_start = data_end.checked_add(4).ok_or(PackArchiveError::Invalid)?;
+        let signed_end = data_end.checked_add(16).ok_or(PackArchiveError::Invalid)?;
+        if descriptor_matches(bytes, values_start, signed_end, entry, central_start)? {
+            return Ok(signed_end);
+        }
     }
-    let end = data_end
-        .checked_add(descriptor_len)
-        .ok_or(PackArchiveError::Invalid)?;
-    if end > central_start {
-        return Err(PackArchiveError::Invalid);
+
+    let unsigned_end = data_end.checked_add(12).ok_or(PackArchiveError::Invalid)?;
+    if descriptor_matches(bytes, data_end, unsigned_end, entry, central_start)? {
+        return Ok(unsigned_end);
     }
-    Ok(end)
+    Err(PackArchiveError::SizeMismatch)
+}
+
+fn descriptor_matches(
+    bytes: &[u8],
+    values_start: usize,
+    descriptor_end: usize,
+    entry: &RawEntry,
+    central_start: usize,
+) -> Result<bool, PackArchiveError> {
+    if descriptor_end > central_start {
+        return Ok(false);
+    }
+    let crc = read_u32(bytes, values_start)?;
+    let compressed = read_u32(bytes, values_start + 4)?;
+    let expanded = read_u32(bytes, values_start + 8)?;
+    Ok(crc == entry.crc32
+        && u64::from(compressed) == entry.compressed_size
+        && u64::from(expanded) == entry.expanded_size)
 }
 
 fn find_eocd(bytes: &[u8]) -> Result<usize, PackArchiveError> {
@@ -562,16 +564,21 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, PackArchiveError> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{
+        cell::Cell,
+        io::{self, Cursor, Read, Seek, SeekFrom},
+        rc::Rc,
+    };
 
     use zip::{CompressionMethod, ZipArchive};
 
     use super::*;
     use crate::pack::test_support::{
-        add_data_descriptor, central_offsets, corrupt_central_signature,
-        corrupt_data_descriptor_expanded_size, find_eocd, mutate_entry_compression,
-        mutate_entry_flags, mutate_entry_name, mutate_entry_sizes, mutate_entry_unix_mode,
-        mutate_eocd_disk_markers, overwrite_le_u32, single_entry_zip, valid_manifest_json,
+        add_data_descriptor, add_signatureless_data_descriptor_with_magic_crc, central_offsets,
+        corrupt_central_signature, corrupt_data_descriptor_expanded_size, find_eocd,
+        mutate_entry_compression, mutate_entry_flags, mutate_entry_name, mutate_entry_sizes,
+        mutate_entry_unix_mode, mutate_eocd_disk_markers, overwrite_le_u32,
+        physically_truncate_central_directory_record, single_entry_zip, valid_manifest_json,
         valid_pack_entries, zip_with_entries, zip_with_entries_and_comments, zip_with_extra_name,
     };
 
@@ -679,6 +686,19 @@ mod tests {
             inspect_archive(Cursor::new(small), MAX_ARCHIVE_BYTES + 1),
             Err(PackArchiveError::TooLarge)
         );
+    }
+
+    #[test]
+    fn bounds_snapshot_reads_when_seek_metadata_lies() {
+        let bytes_read = Rc::new(Cell::new(0));
+        let reader = LyingLengthReader {
+            remaining: MAX_ARCHIVE_BYTES as usize + 4096,
+            reported_end: 1,
+            bytes_read: Rc::clone(&bytes_read),
+        };
+
+        assert_eq!(inspect_archive(reader, 1), Err(PackArchiveError::TooLarge));
+        assert_eq!(bytes_read.get() as u64, MAX_ARCHIVE_BYTES + 1);
     }
 
     #[test]
@@ -888,6 +908,16 @@ mod tests {
     }
 
     #[test]
+    fn accepts_signatureless_descriptor_when_crc_equals_signature_magic() {
+        let bytes = add_signatureless_data_descriptor_with_magic_crc(single_entry_zip(
+            "manifest.json",
+            valid_manifest_json(),
+        ));
+
+        assert!(inspect(&bytes).is_ok());
+    }
+
+    #[test]
     fn rejects_inconsistent_descriptor_and_central_sizes() {
         let mut bytes =
             add_data_descriptor(single_entry_zip("manifest.json", valid_manifest_json()));
@@ -911,6 +941,16 @@ mod tests {
             u32::from_le_bytes(bad_central_size[eocd + 12..eocd + 16].try_into().unwrap());
         overwrite_le_u32(&mut bad_central_size, eocd + 12, declared - 1);
         assert_eq!(inspect(&bad_central_size), Err(PackArchiveError::Invalid));
+    }
+
+    #[test]
+    fn rejects_a_physically_truncated_central_directory_record() {
+        let bytes = physically_truncate_central_directory_record(single_entry_zip(
+            "manifest.json",
+            valid_manifest_json(),
+        ));
+
+        assert_eq!(inspect(&bytes), Err(PackArchiveError::Invalid));
     }
 
     #[test]
@@ -963,6 +1003,26 @@ mod tests {
     }
 
     #[test]
+    fn bounded_read_rejects_declared_size_above_runtime_limit_before_io() {
+        let bytes = single_entry_zip("manifest.json", valid_manifest_json());
+        let inventory = inspect(&bytes).unwrap();
+        let entry = inventory.entry("manifest.json").unwrap();
+        let bytes_read = Rc::new(Cell::new(0));
+        let reader = CountingReader {
+            inner: Cursor::new(bytes),
+            bytes_read: Rc::clone(&bytes_read),
+        };
+        let mut archive = ZipArchive::new(reader).unwrap();
+        bytes_read.set(0);
+
+        assert_eq!(
+            read_entry_bounded(&mut archive, entry, entry.expanded_size() - 1),
+            Err(PackArchiveError::SizeMismatch)
+        );
+        assert_eq!(bytes_read.get(), 0);
+    }
+
+    #[test]
     fn public_error_text_is_sanitized() {
         assert_eq!(
             PackArchiveError::Path.to_string(),
@@ -973,5 +1033,53 @@ mod tests {
 
     fn inspect(bytes: &[u8]) -> Result<ArchiveInventory, PackArchiveError> {
         inspect_archive(Cursor::new(bytes), bytes.len() as u64)
+    }
+
+    struct LyingLengthReader {
+        remaining: usize,
+        reported_end: u64,
+        bytes_read: Rc<Cell<usize>>,
+    }
+
+    struct CountingReader {
+        inner: Cursor<Vec<u8>>,
+        bytes_read: Rc<Cell<usize>>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let read = self.inner.read(buffer)?;
+            self.bytes_read.set(self.bytes_read.get() + read);
+            Ok(read)
+        }
+    }
+
+    impl Seek for CountingReader {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    impl Read for LyingLengthReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let read = self.remaining.min(buffer.len());
+            buffer[..read].fill(0);
+            self.remaining -= read;
+            self.bytes_read.set(self.bytes_read.get() + read);
+            Ok(read)
+        }
+    }
+
+    impl Seek for LyingLengthReader {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            match position {
+                SeekFrom::End(0) => Ok(self.reported_end),
+                SeekFrom::Start(0) => Ok(0),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unsupported test seek",
+                )),
+            }
+        }
     }
 }
