@@ -246,6 +246,8 @@ impl PackStorage {
         let staged =
             load_installed_directory(stage.path(), pack.manifest().id(), InstalledLayout::Stage)
                 .map_err(|_| PackStorageError::Verification)?;
+        #[cfg(test)]
+        checkpoint(InstallCheckpoint::AfterReload, stage.path())?;
         let pcm_matches = staged.sounds.total_len() == pack.sounds().total_len()
             && staged
                 .sounds
@@ -296,21 +298,85 @@ impl PackStorage {
         let _mutation = PACK_STORAGE_MUTATION
             .lock()
             .map_err(|_| PackStorageError::Mutation)?;
-        self.install_validated_using(pack, |point, stage| match (fault, point) {
-            (StorageFault::ManifestAlreadyExists, InstallCheckpoint::StageCreated) => {
-                fs::write(stage.join(MANIFEST_NAME), b"occupied")
-                    .map_err(|_| PackStorageError::InjectedForTest)
+        let mut reached_comparison = false;
+        let result = self.install_validated_using(pack, |point, stage| {
+            if point == InstallCheckpoint::AfterReload {
+                reached_comparison = true;
+                return Ok(());
             }
-            (StorageFault::BeforeVerify, InstallCheckpoint::BeforeVerify) => {
-                Err(PackStorageError::InjectedForTest)
+            match (fault, point) {
+                (StorageFault::ManifestAlreadyExists, InstallCheckpoint::StageCreated) => {
+                    fs::write(stage.join(MANIFEST_NAME), b"occupied")
+                        .map_err(|_| PackStorageError::InjectedForTest)
+                }
+                (StorageFault::BeforeVerify, InstallCheckpoint::BeforeVerify) => {
+                    Err(PackStorageError::InjectedForTest)
+                }
+                (StorageFault::CorruptBeforeVerify, InstallCheckpoint::BeforeVerify) => fs::write(
+                    stage.join(SOUNDS_DIRECTORY_NAME).join("normal-01.wav"),
+                    b"not a WAV",
+                )
+                .map_err(|_| PackStorageError::InjectedForTest),
+                (StorageFault::DifferentValidPcm, InstallCheckpoint::BeforeVerify) => fs::write(
+                    stage.join(SOUNDS_DIRECTORY_NAME).join("normal-01.wav"),
+                    crate::pack::test_support::wav_bytes(1, 48_000, &[42]),
+                )
+                .map_err(|_| PackStorageError::InjectedForTest),
+                (StorageFault::DifferentValidMetadata, InstallCheckpoint::BeforeVerify) => {
+                    let path = stage.join(MANIFEST_NAME);
+                    let original =
+                        fs::read(&path).map_err(|_| PackStorageError::InjectedForTest)?;
+                    let original = std::str::from_utf8(&original)
+                        .map_err(|_| PackStorageError::InjectedForTest)?;
+                    let altered = original.replace(
+                        "\"name\": \"KeyForge Mechanical\"",
+                        "\"name\": \"Altered Mechanical\"",
+                    );
+                    if altered == original {
+                        return Err(PackStorageError::InjectedForTest);
+                    }
+                    let altered = parse_manifest(altered.as_bytes())
+                        .and_then(|manifest| manifest.canonical_json())
+                        .map_err(|_| PackStorageError::InjectedForTest)?;
+                    fs::write(path, altered).map_err(|_| PackStorageError::InjectedForTest)
+                }
+                _ => Ok(()),
             }
-            (StorageFault::CorruptBeforeVerify, InstallCheckpoint::BeforeVerify) => fs::write(
-                stage.join(SOUNDS_DIRECTORY_NAME).join("normal-01.wav"),
-                b"not a WAV",
-            )
-            .map_err(|_| PackStorageError::InjectedForTest),
-            _ => Ok(()),
-        })
+        });
+        if matches!(
+            fault,
+            StorageFault::DifferentValidPcm | StorageFault::DifferentValidMetadata
+        ) && !reached_comparison
+        {
+            Err(PackStorageError::InjectedForTest)
+        } else {
+            result
+        }
+    }
+
+    #[cfg(test)]
+    fn install_validated_with_mutation_checkpoint(
+        &self,
+        pack: ValidatedPack,
+        checkpoint: MutationCheckpoint,
+    ) -> Result<StoredPackMetadata, PackStorageError> {
+        checkpoint
+            .attempting
+            .send(())
+            .map_err(|_| PackStorageError::InjectedForTest)?;
+        let _mutation = PACK_STORAGE_MUTATION
+            .lock()
+            .map_err(|_| PackStorageError::Mutation)?;
+        checkpoint
+            .entered
+            .send(())
+            .map_err(|_| PackStorageError::InjectedForTest)?;
+        if let Some(release) = checkpoint.release {
+            release
+                .recv()
+                .map_err(|_| PackStorageError::InjectedForTest)?;
+        }
+        self.install_validated_using(pack, |_, _| Ok(()))
     }
 }
 
@@ -318,6 +384,8 @@ impl PackStorage {
 enum InstallCheckpoint {
     StageCreated,
     BeforeVerify,
+    #[cfg(test)]
+    AfterReload,
 }
 
 #[cfg(test)]
@@ -326,6 +394,41 @@ enum StorageFault {
     ManifestAlreadyExists,
     BeforeVerify,
     CorruptBeforeVerify,
+    DifferentValidPcm,
+    DifferentValidMetadata,
+}
+
+#[cfg(test)]
+struct MutationCheckpoint {
+    attempting: std::sync::mpsc::Sender<()>,
+    entered: std::sync::mpsc::Sender<()>,
+    release: Option<std::sync::mpsc::Receiver<()>>,
+}
+
+#[cfg(test)]
+impl MutationCheckpoint {
+    fn blocking(
+        attempting: std::sync::mpsc::Sender<()>,
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) -> Self {
+        Self {
+            attempting,
+            entered,
+            release: Some(release),
+        }
+    }
+
+    fn observing(
+        attempting: std::sync::mpsc::Sender<()>,
+        entered: std::sync::mpsc::Sender<()>,
+    ) -> Self {
+        Self {
+            attempting,
+            entered,
+            release: None,
+        }
+    }
 }
 
 fn require_absent_destination(destination: &Path) -> Result<(), PackStorageError> {
@@ -729,6 +832,9 @@ mod tests {
         fs,
         io::Cursor,
         path::{Path, PathBuf},
+        sync::mpsc::{self, RecvTimeoutError},
+        thread,
+        time::Duration,
     };
 
     use zip::CompressionMethod;
@@ -860,6 +966,66 @@ mod tests {
     }
 
     #[test]
+    fn process_mutex_serializes_distinct_storage_instances_for_the_same_root() {
+        let root = TestRoot::new();
+        let managed = root.path().join("packs");
+        let first_storage = PackStorage::open(managed.clone()).unwrap();
+        let second_storage = PackStorage::open(managed).unwrap();
+        let first_pack = validated_pack_with_id("first-pack");
+        let second_pack = validated_pack_with_id("second-pack");
+
+        let (first_attempting_tx, first_attempting_rx) = mpsc::channel();
+        let (first_entered_tx, first_entered_rx) = mpsc::channel();
+        let (first_release_tx, first_release_rx) = mpsc::channel();
+        let (first_done_tx, first_done_rx) = mpsc::channel();
+        let first_thread = thread::spawn(move || {
+            let result = first_storage.install_validated_with_mutation_checkpoint(
+                first_pack,
+                MutationCheckpoint::blocking(
+                    first_attempting_tx,
+                    first_entered_tx,
+                    first_release_rx,
+                ),
+            );
+            first_done_tx.send(result).unwrap();
+        });
+
+        first_attempting_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        first_entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+
+        let (second_attempting_tx, second_attempting_rx) = mpsc::channel();
+        let (second_entered_tx, second_entered_rx) = mpsc::channel();
+        let (second_done_tx, second_done_rx) = mpsc::channel();
+        let second_thread = thread::spawn(move || {
+            let result = second_storage.install_validated_with_mutation_checkpoint(
+                second_pack,
+                MutationCheckpoint::observing(second_attempting_tx, second_entered_tx),
+            );
+            second_done_tx.send(result).unwrap();
+        });
+
+        second_attempting_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        let blocked_while_first_held = second_entered_rx.recv_timeout(Duration::from_millis(100));
+        first_release_tx.send(()).unwrap();
+        let first_result = first_done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let second_entered_after_release = second_entered_rx.recv_timeout(Duration::from_secs(2));
+        let second_result = second_done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        first_thread.join().unwrap();
+        second_thread.join().unwrap();
+
+        assert_eq!(blocked_while_first_held, Err(RecvTimeoutError::Timeout));
+        assert_eq!(second_entered_after_release, Ok(()));
+        assert_eq!(first_result.unwrap().id.as_str(), "first-pack");
+        assert_eq!(second_result.unwrap().id.as_str(), "second-pack");
+    }
+
+    #[test]
     fn create_new_prevents_a_stage_file_from_being_replaced() {
         let root = TestRoot::new();
         let managed = root.path().join("packs");
@@ -903,6 +1069,46 @@ mod tests {
                 .install_validated_with_fault(validated_pack(), StorageFault::CorruptBeforeVerify),
             Err(PackStorageError::Verification)
         );
+        assert!(stage_directories(&managed).is_empty());
+        assert!(!managed.join("keyforge-mechanical").exists());
+    }
+
+    #[test]
+    fn different_valid_staged_pcm_fails_post_reload_equivalence() {
+        let root = TestRoot::new();
+        let managed = root.path().join("packs");
+        let storage = PackStorage::open(managed.clone()).unwrap();
+        let unrelated = managed.join("do-not-delete");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("sentinel"), b"keep").unwrap();
+
+        assert_eq!(
+            storage
+                .install_validated_with_fault(validated_pack(), StorageFault::DifferentValidPcm,),
+            Err(PackStorageError::Verification)
+        );
+        assert_eq!(fs::read(unrelated.join("sentinel")).unwrap(), b"keep");
+        assert!(stage_directories(&managed).is_empty());
+        assert!(!managed.join("keyforge-mechanical").exists());
+    }
+
+    #[test]
+    fn different_valid_staged_metadata_fails_post_reload_equivalence() {
+        let root = TestRoot::new();
+        let managed = root.path().join("packs");
+        let storage = PackStorage::open(managed.clone()).unwrap();
+        let unrelated = managed.join("do-not-delete");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("sentinel"), b"keep").unwrap();
+
+        assert_eq!(
+            storage.install_validated_with_fault(
+                validated_pack(),
+                StorageFault::DifferentValidMetadata,
+            ),
+            Err(PackStorageError::Verification)
+        );
+        assert_eq!(fs::read(unrelated.join("sentinel")).unwrap(), b"keep");
         assert!(stage_directories(&managed).is_empty());
         assert!(!managed.join("keyforge-mechanical").exists());
     }
@@ -1023,6 +1229,63 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn installed_loader_rejects_a_manifest_symlink_without_traversal() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestRoot::new();
+        let managed = root.path().join("packs");
+        let storage = PackStorage::open(managed.clone()).unwrap();
+        let installed = storage.install_validated(validated_pack()).unwrap();
+        let manifest = managed.join("keyforge-mechanical/manifest.json");
+        let outside = root.path().join("outside-manifest.json");
+        fs::rename(&manifest, &outside).unwrap();
+        symlink(&outside, &manifest).unwrap();
+
+        let error = storage.load_installed(&installed.id).unwrap_err();
+        assert_sanitized_installed_error(error, root.path());
+        assert!(outside.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_loader_rejects_a_sounds_directory_symlink_without_traversal() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestRoot::new();
+        let managed = root.path().join("packs");
+        let storage = PackStorage::open(managed.clone()).unwrap();
+        let installed = storage.install_validated(validated_pack()).unwrap();
+        let sounds = managed.join("keyforge-mechanical/sounds");
+        let outside = root.path().join("outside-sounds");
+        fs::rename(&sounds, &outside).unwrap();
+        symlink(&outside, &sounds).unwrap();
+
+        let error = storage.load_installed(&installed.id).unwrap_err();
+        assert_sanitized_installed_error(error, root.path());
+        assert!(outside.join("normal-01.wav").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_loader_rejects_a_referenced_wav_symlink_without_traversal() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestRoot::new();
+        let managed = root.path().join("packs");
+        let storage = PackStorage::open(managed.clone()).unwrap();
+        let installed = storage.install_validated(validated_pack()).unwrap();
+        let wav = managed.join("keyforge-mechanical/sounds/normal-01.wav");
+        let outside = root.path().join("outside-normal-01.wav");
+        fs::rename(&wav, &outside).unwrap();
+        symlink(&outside, &wav).unwrap();
+
+        let error = storage.load_installed(&installed.id).unwrap_err();
+        assert_sanitized_installed_error(error, root.path());
+        assert!(outside.is_file());
+    }
+
     #[test]
     fn installed_loader_rejects_a_noncanonical_manifest() {
         let root = TestRoot::new();
@@ -1129,5 +1392,12 @@ mod tests {
         let mut snapshot = BTreeMap::new();
         visit(root, root, &mut snapshot);
         snapshot
+    }
+
+    fn assert_sanitized_installed_error(error: PackStorageError, root: &Path) {
+        assert_eq!(error, PackStorageError::InstalledPack);
+        let display = error.to_string();
+        assert_eq!(display, "installed sound pack is invalid");
+        assert!(!display.contains(root.to_string_lossy().as_ref()));
     }
 }
