@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fmt,
-    io::{Cursor, Read, Seek, SeekFrom},
+    io::{Cursor, Read, Seek},
     str,
 };
 
@@ -117,6 +117,11 @@ pub(crate) fn inspect_archive<R: Read + Seek>(
     reader: R,
     source_size: u64,
 ) -> Result<ArchiveInventory, PackArchiveError> {
+    let raw_bytes = snapshot_archive(reader, source_size)?;
+    inspect_archive_snapshot(&raw_bytes)
+}
+
+fn snapshot_archive<R: Read>(reader: R, source_size: u64) -> Result<Vec<u8>, PackArchiveError> {
     if source_size > MAX_ARCHIVE_BYTES {
         return Err(PackArchiveError::TooLarge);
     }
@@ -130,12 +135,15 @@ pub(crate) fn inspect_archive<R: Read + Seek>(
     if raw_bytes.len() as u64 > MAX_ARCHIVE_BYTES {
         return Err(PackArchiveError::TooLarge);
     }
+    Ok(raw_bytes)
+}
 
-    let raw_entries = preflight_zip_structure(&raw_bytes)?;
+fn inspect_archive_snapshot(raw_bytes: &[u8]) -> Result<ArchiveInventory, PackArchiveError> {
+    let raw_entries = preflight_zip_structure(raw_bytes)?;
     validate_raw_names(&raw_entries)?;
 
-    let mut archive = ZipArchive::new(Cursor::new(raw_bytes.as_slice()))
-        .map_err(|_| PackArchiveError::Invalid)?;
+    let mut archive =
+        ZipArchive::new(Cursor::new(raw_bytes)).map_err(|_| PackArchiveError::Invalid)?;
     if archive.len() != raw_entries.len() {
         return Err(PackArchiveError::Invalid);
     }
@@ -258,14 +266,13 @@ pub(crate) fn read_entry_bounded<R: Read + Seek>(
 }
 
 pub(crate) fn validate_archive<R: Read + Seek>(
-    mut reader: R,
+    reader: R,
     source_size: u64,
 ) -> Result<ValidatedPack, PackInstallError> {
-    let inventory = inspect_archive(&mut reader, source_size)?;
-    reader
-        .seek(SeekFrom::Start(0))
+    let raw_bytes = snapshot_archive(reader, source_size)?;
+    let inventory = inspect_archive_snapshot(&raw_bytes)?;
+    let mut archive = ZipArchive::new(Cursor::new(raw_bytes.as_slice()))
         .map_err(|_| PackArchiveError::Invalid)?;
-    let mut archive = ZipArchive::new(reader).map_err(|_| PackArchiveError::Invalid)?;
 
     let manifest_entry = inventory
         .entry("manifest.json")
@@ -693,6 +700,28 @@ mod tests {
         assert_eq!(
             first_values,
             [1.0, 2.0, 3.0, 4.0, 5.0, 6.0].map(|value| value / 32_768.0)
+        );
+    }
+
+    #[test]
+    fn validation_uses_one_immutable_archive_snapshot() {
+        let first = valid_pack_zip();
+        let mut second_entries = valid_pack_entries();
+        second_entries[1].0 = "sounds\\normal-01.wav".to_owned();
+        second_entries[1].1 = wav_bytes(1, 48_000, &[42]);
+        let second = zip_with_entries(CompressionMethod::Stored, second_entries);
+        assert_eq!(first.len(), second.len());
+        assert_eq!(inspect(&second), Err(PackArchiveError::Path));
+
+        let pack = validate_archive(
+            SwappingReader::new(first.clone(), second),
+            first.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(
+            pack.sounds().normal()[0].sample().samples(),
+            &[1.0 / 32_768.0]
         );
     }
 
@@ -1232,6 +1261,45 @@ mod tests {
     struct CountingReader {
         inner: Cursor<Vec<u8>>,
         bytes_read: Rc<Cell<usize>>,
+    }
+
+    struct SwappingReader {
+        first: Cursor<Vec<u8>>,
+        second: Cursor<Vec<u8>>,
+        swapped: bool,
+    }
+
+    impl SwappingReader {
+        fn new(first: Vec<u8>, second: Vec<u8>) -> Self {
+            Self {
+                first: Cursor::new(first),
+                second: Cursor::new(second),
+                swapped: false,
+            }
+        }
+
+        fn active(&mut self) -> &mut Cursor<Vec<u8>> {
+            if self.swapped {
+                &mut self.second
+            } else {
+                &mut self.first
+            }
+        }
+    }
+
+    impl Read for SwappingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.active().read(buffer)
+        }
+    }
+
+    impl Seek for SwappingReader {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            if !self.swapped && position == SeekFrom::Start(0) {
+                self.swapped = true;
+            }
+            self.active().seek(position)
+        }
     }
 
     impl Read for CountingReader {
