@@ -3,6 +3,8 @@ mod archive;
 #[allow(dead_code)]
 mod decoder;
 mod manifest;
+#[allow(dead_code)]
+mod storage;
 
 use std::fmt;
 
@@ -19,6 +21,9 @@ pub use manifest::{
     parse_manifest, CanonicalSoundPath, PackId, PackManifestError, PackVersion, SoundMap,
     ValidatedManifest,
 };
+pub use storage::PackStorageError;
+#[allow(unused_imports)]
+pub(crate) use storage::{PackStorage, StoredDecodedPack, StoredPackMetadata};
 
 pub const MAX_DECODED_PACK_BYTES: usize = 64 * 1024 * 1024;
 
@@ -54,6 +59,8 @@ pub enum PackInstallError {
     Archive(PackArchiveError),
     Manifest(PackManifestError),
     Decode(PackDecodeError),
+    Storage(PackStorageError),
+    DuplicateId,
 }
 
 impl fmt::Display for PackInstallError {
@@ -62,6 +69,8 @@ impl fmt::Display for PackInstallError {
             Self::Archive(_) => "archive",
             Self::Manifest(_) => "manifest",
             Self::Decode(_) => "decode",
+            Self::Storage(_) => "storage",
+            Self::DuplicateId => "duplicate id",
         };
         write!(formatter, "sound-pack installation failed: {category}")
     }
@@ -73,6 +82,8 @@ impl std::error::Error for PackInstallError {
             Self::Archive(error) => Some(error),
             Self::Manifest(error) => Some(error),
             Self::Decode(error) => Some(error),
+            Self::Storage(error) => Some(error),
+            Self::DuplicateId => None,
         }
     }
 }
@@ -92,5 +103,15 @@ impl From<PackManifestError> for PackInstallError {
 impl From<PackDecodeError> for PackInstallError {
     fn from(error: PackDecodeError) -> Self {
         Self::Decode(error)
+    }
+}
+
+impl From<PackStorageError> for PackInstallError {
+    fn from(error: PackStorageError) -> Self {
+        if error == PackStorageError::DuplicateId {
+            Self::DuplicateId
+        } else {
+            Self::Storage(error)
+        }
     }
 }

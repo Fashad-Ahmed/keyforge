@@ -74,6 +74,10 @@ impl CanonicalSoundPath {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn file_name(&self) -> &str {
+        &self.0["sounds/".len()..]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -204,6 +208,28 @@ impl ValidatedManifest {
     pub fn sounds(&self) -> &SoundMap<CanonicalSoundPath> {
         &self.sounds
     }
+
+    pub(crate) fn canonical_json(&self) -> Result<Vec<u8>, PackManifestError> {
+        let view = CanonicalManifest {
+            schema_version: 1,
+            id: &self.id,
+            name: &self.name,
+            pack_version: self.pack_version.to_string(),
+            sounds: &self.sounds,
+        };
+        let mut bytes = serde_json::to_vec_pretty(&view).map_err(|_| PackManifestError::Json)?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+}
+
+#[derive(Serialize)]
+struct CanonicalManifest<'a> {
+    schema_version: u8,
+    id: &'a PackId,
+    name: &'a str,
+    pack_version: String,
+    sounds: &'a SoundMap<CanonicalSoundPath>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,6 +402,41 @@ mod tests {
         assert_eq!(manifest.pack_version().to_string(), "1.0.0");
         assert_eq!(manifest.sounds().normal().len(), 2);
         assert_eq!(manifest.sounds().total_len(), 6);
+    }
+
+    #[test]
+    fn canonical_serialization_is_deterministic_and_semantically_identical() {
+        let manifest = parse_manifest(&valid_manifest_json()).unwrap();
+        let canonical = manifest.canonical_json().unwrap();
+        assert_eq!(
+            canonical,
+            br#"{
+  "schema_version": 1,
+  "id": "keyforge-mechanical",
+  "name": "KeyForge Mechanical",
+  "pack_version": "1.0.0",
+  "sounds": {
+    "normal": [
+      "sounds/normal-01.wav",
+      "sounds/normal-02.wav"
+    ],
+    "space": [
+      "sounds/space-01.wav"
+    ],
+    "enter": [
+      "sounds/enter-01.wav"
+    ],
+    "backspace": [
+      "sounds/backspace-01.wav"
+    ],
+    "modifier": [
+      "sounds/modifier-01.wav"
+    ]
+  }
+}
+"#
+        );
+        assert_eq!(parse_manifest(&canonical), Ok(manifest));
     }
 
     #[test]

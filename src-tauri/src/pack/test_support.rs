@@ -1,10 +1,61 @@
-use std::io::{Cursor, Write};
+use std::{
+    fs,
+    io::{Cursor, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 use zip::{
     write::{FullFileOptions, SimpleFileOptions},
     CompressionMethod, ZipWriter,
 };
+
+static TEST_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
+const TEST_ROOT_PREFIX: &str = "keyforge-pack-test-";
+
+pub(crate) struct TestRoot {
+    path: PathBuf,
+}
+
+impl TestRoot {
+    pub(crate) fn new() -> Self {
+        let temporary_directory = std::env::temp_dir();
+        loop {
+            let counter = TEST_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = temporary_directory.join(format!(
+                "{TEST_ROOT_PREFIX}{}-{counter}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self { path },
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create test-owned pack root: {error}"),
+            }
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TestRoot {
+    fn drop(&mut self) {
+        let has_owned_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(TEST_ROOT_PREFIX));
+        assert!(has_owned_name, "refusing to remove an unowned test path");
+        assert_eq!(self.path.parent(), Some(std::env::temp_dir().as_path()));
+        match fs::remove_dir_all(&self.path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove test-owned pack root: {error}"),
+        }
+    }
+}
 
 pub(crate) fn valid_manifest_json() -> Vec<u8> {
     br#"{
