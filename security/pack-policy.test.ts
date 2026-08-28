@@ -32,6 +32,8 @@ function auditStartupEntrypoints(readSource: SourceReader): string[] {
       continue;
     }
 
+    violations.push(...sourceBypassViolations(path, source));
+
     for (const symbol of FORBIDDEN_STARTUP_SYMBOLS) {
       if (new RegExp(`\\b${symbol}\\b`).test(source)) {
         violations.push(`${path}: ${symbol}`);
@@ -51,6 +53,19 @@ function auditStartupEntrypoints(readSource: SourceReader): string[] {
     }
   }
 
+  return violations;
+}
+
+function sourceBypassViolations(path: string, source: string): string[] {
+  const violations: string[] = [];
+  if (
+    /#\s*\[\s*(?:path\s*=|cfg_attr\s*\([^\]]*\bpath\s*=)/.test(source)
+  ) {
+    violations.push(`${path}: module path override`);
+  }
+  if (/\binclude\s*!\s*\(/.test(source)) {
+    violations.push(`${path}: include!`);
+  }
   return violations;
 }
 
@@ -152,6 +167,33 @@ it("flags integration in a public child of a reachable private commands module",
   });
 
   expect(violations).toContain("src-tauri/src/commands/startup.rs: PackManager");
+});
+
+it("rejects module path override attributes without reading their paths", () => {
+  const directPathViolations = auditFixture({
+    "src-tauri/src/lib.rs":
+      '#[path = "hidden-startup.rs"]\nmod startup;\npub fn run() {}',
+  });
+  const conditionalPathViolations = auditFixture({
+    "src-tauri/src/lib.rs":
+      '#[cfg_attr(target_os = "macos", path = "hidden-startup.rs")]\nmod startup;\npub fn run() {}',
+  });
+
+  expect(directPathViolations).toContain(
+    "src-tauri/src/lib.rs: module path override",
+  );
+  expect(conditionalPathViolations).toContain(
+    "src-tauri/src/lib.rs: module path override",
+  );
+});
+
+it("rejects reachable include macro code injection", () => {
+  const violations = auditFixture({
+    "src-tauri/src/lib.rs": "mod startup;\npub fn run() {}",
+    "src-tauri/src/startup.rs": 'include!("generated-startup.rs");',
+  });
+
+  expect(violations).toContain("src-tauri/src/startup.rs: include!");
 });
 
 it("does not scan foundational public module definitions", () => {
