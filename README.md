@@ -48,6 +48,14 @@ cargo run --locked --manifest-path src-tauri/Cargo.toml --example audio_smoke
 
 Warning: this command emits a short tone through the default output device. It is a manual developer check, not a production integration path.
 
+To manually validate the bundled pack import and playback path:
+
+```bash
+cargo run --locked --manifest-path src-tauri/Cargo.toml --example pack_smoke
+```
+
+Warning: this developer command plays a short sequence through the default output device. It uses a test-owned temporary pack directory and is not part of production Tauri startup.
+
 ## Verification
 
 ```bash
