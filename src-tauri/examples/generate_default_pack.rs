@@ -11,7 +11,8 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 const SAMPLE_RATE: u32 = 48_000;
-const PEAK_LIMIT: f32 = 0.88;
+const Q15_ONE: i64 = 32_767;
+const PEAK_LIMIT: i64 = 28_800;
 const MANIFEST: &[u8] = br#"{
   "schema_version": 1,
   "id": "keyforge-mechanical",
@@ -64,7 +65,7 @@ struct Voice {
     path: &'static str,
     seed: u32,
     frames: usize,
-    body_hz: f32,
+    body_hz: u32,
     kind: SoundKind,
     delayed_impulse: Option<usize>,
 }
@@ -74,7 +75,7 @@ const VOICES: [Voice; 7] = [
         path: "sounds/backspace-01.wav",
         seed: 0x8a31_37d2,
         frames: 1_056,
-        body_hz: 1_120.0,
+        body_hz: 1_120,
         kind: SoundKind::Backspace,
         delayed_impulse: None,
     },
@@ -82,7 +83,7 @@ const VOICES: [Voice; 7] = [
         path: "sounds/enter-01.wav",
         seed: 0xe713_40c5,
         frames: 1_920,
-        body_hz: 690.0,
+        body_hz: 690,
         kind: SoundKind::Enter,
         delayed_impulse: Some(672),
     },
@@ -90,7 +91,7 @@ const VOICES: [Voice; 7] = [
         path: "sounds/modifier-01.wav",
         seed: 0x4d02_b981,
         frames: 864,
-        body_hz: 1_460.0,
+        body_hz: 1_460,
         kind: SoundKind::Modifier,
         delayed_impulse: None,
     },
@@ -98,7 +99,7 @@ const VOICES: [Voice; 7] = [
         path: "sounds/normal-01.wav",
         seed: 0x1357_9bdf,
         frames: 1_440,
-        body_hz: 920.0,
+        body_hz: 920,
         kind: SoundKind::Normal,
         delayed_impulse: None,
     },
@@ -106,7 +107,7 @@ const VOICES: [Voice; 7] = [
         path: "sounds/normal-02.wav",
         seed: 0x2468_ace1,
         frames: 1_536,
-        body_hz: 1_010.0,
+        body_hz: 1_010,
         kind: SoundKind::Normal,
         delayed_impulse: None,
     },
@@ -114,7 +115,7 @@ const VOICES: [Voice; 7] = [
         path: "sounds/normal-03.wav",
         seed: 0x6c8e_9cf3,
         frames: 1_344,
-        body_hz: 850.0,
+        body_hz: 850,
         kind: SoundKind::Normal,
         delayed_impulse: None,
     },
@@ -122,7 +123,7 @@ const VOICES: [Voice; 7] = [
         path: "sounds/space-01.wav",
         seed: 0xb529_7a4d,
         frames: 2_160,
-        body_hz: 520.0,
+        body_hz: 520,
         kind: SoundKind::Space,
         delayed_impulse: Some(960),
     },
@@ -234,13 +235,14 @@ fn encode_wav(samples: &[i16]) -> Result<Vec<u8>, GeneratorError> {
 }
 
 fn mechanical_sample(voice: Voice) -> Vec<i16> {
-    let (noise_gain, noise_decay, body_gain, body_decay, click_gain) = match voice.kind {
-        SoundKind::Normal => (0.34, 115.0, 0.22, 50.0, 0.38),
-        SoundKind::Space => (0.25, 72.0, 0.27, 36.0, 0.28),
-        SoundKind::Enter => (0.31, 82.0, 0.30, 43.0, 0.35),
-        SoundKind::Backspace => (0.29, 130.0, 0.18, 65.0, 0.42),
-        SoundKind::Modifier => (0.23, 150.0, 0.15, 75.0, 0.35),
-    };
+    let (noise_gain, noise_end, body_gain, body_end, click_gain, attack_frames, release_frames) =
+        match voice.kind {
+            SoundKind::Normal => (11_141, 512, 7_209, 2_048, 12_451, 12, 160),
+            SoundKind::Space => (8_192, 2_048, 8_847, 4_096, 9_175, 18, 256),
+            SoundKind::Enter => (10_158, 1_536, 9_830, 3_072, 11_469, 14, 224),
+            SoundKind::Backspace => (9_503, 256, 5_898, 1_024, 13_762, 8, 144),
+            SoundKind::Modifier => (7_536, 128, 4_915, 768, 11_469, 6, 128),
+        };
     let mut state = voice.seed;
 
     (0..voice.frames)
@@ -248,38 +250,90 @@ fn mechanical_sample(voice: Voice) -> Vec<i16> {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
-            let noise = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
-            let time = index as f32 / SAMPLE_RATE as f32;
-            let noise_attack = (index as f32 / 12.0).min(1.0);
-            let noise_layer = noise * noise_gain * noise_attack * (-time * noise_decay).exp();
-            let resonant_tail = (std::f32::consts::TAU * voice.body_hz * time).sin()
-                * body_gain
-                * (-time * body_decay).exp();
-            let click_phase = std::f32::consts::TAU * 6_200.0 * time;
-            let click = if index < 36 {
-                click_phase.sin() * click_gain * (1.0 - index as f32 / 36.0).powi(2)
-            } else {
-                0.0
-            };
-            let delayed_click = voice.delayed_impulse.map_or(0.0, |delay| {
+            let noise = i64::from(state >> 16) - 32_768;
+            let noise_layer = scale_q15(
+                scale_q15(noise, noise_gain),
+                decay_envelope(index, voice.frames, noise_end),
+            );
+            let resonant_tail = scale_q15(
+                scale_q15(
+                    oscillator_sample(index, voice.body_hz, 0x4000_0000),
+                    body_gain,
+                ),
+                decay_envelope(index, voice.frames, body_end),
+            );
+            let click = impulse(index, 36, 6_200, click_gain);
+            let delayed_click = voice.delayed_impulse.map_or(0, |delay| {
                 if index < delay {
-                    return 0.0;
+                    return 0;
                 }
                 let delayed_index = index - delay;
-                if delayed_index >= 64 {
-                    return 0.0;
-                }
-                let delayed_time = delayed_index as f32 / SAMPLE_RATE as f32;
-                (std::f32::consts::TAU * 4_700.0 * delayed_time).sin()
-                    * click_gain
-                    * 0.72
-                    * (1.0 - delayed_index as f32 / 64.0).powi(2)
+                impulse(delayed_index, 64, 4_700, scale_q15(click_gain, 23_592))
             });
-            let value = (noise_layer + resonant_tail + click + delayed_click)
+            let bounded_mix = (noise_layer + resonant_tail + click + delayed_click)
                 .clamp(-PEAK_LIMIT, PEAK_LIMIT);
-            (value * i16::MAX as f32).round() as i16
+            let attack = attack_envelope(index, attack_frames);
+            let release = release_envelope(index, voice.frames, release_frames);
+            scale_q15(bounded_mix, scale_q15(attack, release)) as i16
         })
         .collect()
+}
+
+fn scale_q15(value: i64, gain: i64) -> i64 {
+    value * gain / Q15_ONE
+}
+
+fn attack_envelope(index: usize, attack_frames: usize) -> i64 {
+    if attack_frames <= 1 || index >= attack_frames - 1 {
+        return Q15_ONE;
+    }
+    index as i64 * Q15_ONE / (attack_frames - 1) as i64
+}
+
+fn decay_envelope(index: usize, frames: usize, end_level: i64) -> i64 {
+    if frames <= 1 {
+        return end_level;
+    }
+    Q15_ONE - (Q15_ONE - end_level) * index as i64 / (frames - 1) as i64
+}
+
+fn release_envelope(index: usize, frames: usize, release_frames: usize) -> i64 {
+    let release_start = frames.saturating_sub(release_frames);
+    if index < release_start {
+        return Q15_ONE;
+    }
+    let remaining = frames.saturating_sub(index + 1) as i64;
+    let release_span = frames.saturating_sub(release_start + 1).max(1) as i64;
+    let linear = remaining * Q15_ONE / release_span;
+    scale_q15(linear, linear)
+}
+
+fn impulse(index: usize, frames: usize, frequency: u32, gain: i64) -> i64 {
+    if index >= frames || frames <= 1 {
+        return 0;
+    }
+    let remaining = (frames - index - 1) as i64;
+    let linear = remaining * Q15_ONE / (frames - 1) as i64;
+    let envelope = scale_q15(linear, linear);
+    scale_q15(
+        scale_q15(oscillator_sample(index, frequency, 0), gain),
+        envelope,
+    )
+}
+
+fn oscillator_sample(index: usize, frequency: u32, phase_offset: u32) -> i64 {
+    let phase_step = (u64::from(frequency) << 32) / u64::from(SAMPLE_RATE);
+    let phase = (index as u64 * phase_step) as u32;
+    triangle_wave(phase.wrapping_add(phase_offset))
+}
+
+fn triangle_wave(phase: u32) -> i64 {
+    let position = i64::from(phase >> 16);
+    if position < 32_768 {
+        position * 2 - 32_767
+    } else {
+        98_303 - position * 2
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +358,33 @@ mod tests {
         "sounds/normal-03.wav",
         "sounds/space-01.wav",
     ];
+
+    const COMMITTED_ARCHIVE: &[u8] = include_bytes!("../assets/packs/keyforge-mechanical.zip");
+
+    #[test]
+    fn synthesis_source_rejects_float_transcendental_math() {
+        let source = include_str!("generate_default_pack.rs");
+        let synthesis_start = source.find("fn mechanical_sample").unwrap();
+        let synthesis_end = source[synthesis_start..]
+            .find("\n#[cfg(test)]")
+            .map(|offset| synthesis_start + offset)
+            .unwrap();
+        let synthesis = &source[synthesis_start..synthesis_end];
+
+        for forbidden in [
+            ".sin(", ".cos(", ".tan(", ".exp(", ".pow", ".sqrt(", "f32", "f64",
+        ] {
+            assert!(
+                !synthesis.contains(forbidden),
+                "synthesis contains nondeterministic float operation: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_archive_matches_the_committed_asset() {
+        assert_eq!(generate_archive().unwrap(), COMMITTED_ARCHIVE);
+    }
 
     #[test]
     fn generation_is_byte_for_byte_reproducible_and_data_only() {
@@ -344,9 +425,20 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             assert!((864..=2_160).contains(&samples.len()));
-            let peak = samples.into_iter().map(i16::unsigned_abs).max().unwrap();
+            let peak = samples
+                .iter()
+                .map(|sample| sample.unsigned_abs())
+                .max()
+                .unwrap();
             assert!(peak > 1_638);
             assert!(peak < 29_490);
+            assert_eq!(samples.last(), Some(&0), "{name} must end at zero");
+            let tail_peak = samples[samples.len() - 16..]
+                .iter()
+                .map(|sample| sample.unsigned_abs())
+                .max()
+                .unwrap();
+            assert!(tail_peak <= 512, "{name} tail peak {tail_peak} exceeds 512");
         }
     }
 
