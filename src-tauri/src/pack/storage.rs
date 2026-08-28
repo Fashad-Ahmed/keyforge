@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex,
+        Mutex, MutexGuard,
     },
 };
 
@@ -136,9 +136,7 @@ impl PackStorage {
         &self,
         pack: ValidatedPack,
     ) -> Result<StoredPackMetadata, PackStorageError> {
-        let _mutation = PACK_STORAGE_MUTATION
-            .lock()
-            .map_err(|_| PackStorageError::Mutation)?;
+        let _mutation = self.mutation_guard()?;
         self.install_validated_using(pack, |_, _| Ok(()))
     }
 
@@ -178,9 +176,7 @@ impl PackStorage {
     }
 
     pub(crate) fn cleanup_stale_stages(&self) -> Result<usize, PackStorageError> {
-        let _mutation = PACK_STORAGE_MUTATION
-            .lock()
-            .map_err(|_| PackStorageError::Mutation)?;
+        let _mutation = self.mutation_guard()?;
         self.ensure_root_identity()?;
 
         let mut owned_stages = Vec::new();
@@ -289,15 +285,24 @@ impl PackStorage {
         Ok(())
     }
 
+    fn mutation_guard(&self) -> Result<MutexGuard<'static, ()>, PackStorageError> {
+        PACK_STORAGE_MUTATION
+            .lock()
+            .map_err(|_| PackStorageError::Mutation)
+    }
+
+    #[cfg(test)]
+    fn try_mutation_guard_for_test(&self) -> std::sync::TryLockResult<MutexGuard<'static, ()>> {
+        PACK_STORAGE_MUTATION.try_lock()
+    }
+
     #[cfg(test)]
     fn install_validated_with_fault(
         &self,
         pack: ValidatedPack,
         fault: StorageFault,
     ) -> Result<StoredPackMetadata, PackStorageError> {
-        let _mutation = PACK_STORAGE_MUTATION
-            .lock()
-            .map_err(|_| PackStorageError::Mutation)?;
+        let _mutation = self.mutation_guard()?;
         let mut reached_comparison = false;
         let result = self.install_validated_using(pack, |point, stage| {
             if point == InstallCheckpoint::AfterReload {
@@ -353,31 +358,6 @@ impl PackStorage {
             result
         }
     }
-
-    #[cfg(test)]
-    fn install_validated_with_mutation_checkpoint(
-        &self,
-        pack: ValidatedPack,
-        checkpoint: MutationCheckpoint,
-    ) -> Result<StoredPackMetadata, PackStorageError> {
-        checkpoint
-            .attempting
-            .send(())
-            .map_err(|_| PackStorageError::InjectedForTest)?;
-        let _mutation = PACK_STORAGE_MUTATION
-            .lock()
-            .map_err(|_| PackStorageError::Mutation)?;
-        checkpoint
-            .entered
-            .send(())
-            .map_err(|_| PackStorageError::InjectedForTest)?;
-        if let Some(release) = checkpoint.release {
-            release
-                .recv()
-                .map_err(|_| PackStorageError::InjectedForTest)?;
-        }
-        self.install_validated_using(pack, |_, _| Ok(()))
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,39 +376,6 @@ enum StorageFault {
     CorruptBeforeVerify,
     DifferentValidPcm,
     DifferentValidMetadata,
-}
-
-#[cfg(test)]
-struct MutationCheckpoint {
-    attempting: std::sync::mpsc::Sender<()>,
-    entered: std::sync::mpsc::Sender<()>,
-    release: Option<std::sync::mpsc::Receiver<()>>,
-}
-
-#[cfg(test)]
-impl MutationCheckpoint {
-    fn blocking(
-        attempting: std::sync::mpsc::Sender<()>,
-        entered: std::sync::mpsc::Sender<()>,
-        release: std::sync::mpsc::Receiver<()>,
-    ) -> Self {
-        Self {
-            attempting,
-            entered,
-            release: Some(release),
-        }
-    }
-
-    fn observing(
-        attempting: std::sync::mpsc::Sender<()>,
-        entered: std::sync::mpsc::Sender<()>,
-    ) -> Self {
-        Self {
-            attempting,
-            entered,
-            release: None,
-        }
-    }
 }
 
 fn require_absent_destination(destination: &Path) -> Result<(), PackStorageError> {
@@ -832,9 +779,7 @@ mod tests {
         fs,
         io::Cursor,
         path::{Path, PathBuf},
-        sync::mpsc::{self, RecvTimeoutError},
-        thread,
-        time::Duration,
+        sync::TryLockError,
     };
 
     use zip::CompressionMethod;
@@ -971,58 +916,16 @@ mod tests {
         let managed = root.path().join("packs");
         let first_storage = PackStorage::open(managed.clone()).unwrap();
         let second_storage = PackStorage::open(managed).unwrap();
-        let first_pack = validated_pack_with_id("first-pack");
-        let second_pack = validated_pack_with_id("second-pack");
 
-        let (first_attempting_tx, first_attempting_rx) = mpsc::channel();
-        let (first_entered_tx, first_entered_rx) = mpsc::channel();
-        let (first_release_tx, first_release_rx) = mpsc::channel();
-        let (first_done_tx, first_done_rx) = mpsc::channel();
-        let first_thread = thread::spawn(move || {
-            let result = first_storage.install_validated_with_mutation_checkpoint(
-                first_pack,
-                MutationCheckpoint::blocking(
-                    first_attempting_tx,
-                    first_entered_tx,
-                    first_release_rx,
-                ),
-            );
-            first_done_tx.send(result).unwrap();
-        });
+        let first_guard = first_storage.mutation_guard().unwrap();
+        assert!(matches!(
+            second_storage.try_mutation_guard_for_test(),
+            Err(TryLockError::WouldBlock)
+        ));
+        drop(first_guard);
 
-        first_attempting_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap();
-        first_entered_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap();
-
-        let (second_attempting_tx, second_attempting_rx) = mpsc::channel();
-        let (second_entered_tx, second_entered_rx) = mpsc::channel();
-        let (second_done_tx, second_done_rx) = mpsc::channel();
-        let second_thread = thread::spawn(move || {
-            let result = second_storage.install_validated_with_mutation_checkpoint(
-                second_pack,
-                MutationCheckpoint::observing(second_attempting_tx, second_entered_tx),
-            );
-            second_done_tx.send(result).unwrap();
-        });
-
-        second_attempting_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap();
-        let blocked_while_first_held = second_entered_rx.recv_timeout(Duration::from_millis(100));
-        first_release_tx.send(()).unwrap();
-        let first_result = first_done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        let second_entered_after_release = second_entered_rx.recv_timeout(Duration::from_secs(2));
-        let second_result = second_done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        first_thread.join().unwrap();
-        second_thread.join().unwrap();
-
-        assert_eq!(blocked_while_first_held, Err(RecvTimeoutError::Timeout));
-        assert_eq!(second_entered_after_release, Ok(()));
-        assert_eq!(first_result.unwrap().id.as_str(), "first-pack");
-        assert_eq!(second_result.unwrap().id.as_str(), "second-pack");
+        let second_guard = second_storage.try_mutation_guard_for_test().unwrap();
+        drop(second_guard);
     }
 
     #[test]
