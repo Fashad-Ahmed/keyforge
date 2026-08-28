@@ -38,7 +38,10 @@ function auditStartupEntrypoints(readSource: SourceReader): string[] {
       }
     }
 
-    for (const moduleName of privateModuleNames(source)) {
+    for (const moduleName of moduleNames(source)) {
+      if (isCrateFoundation(path, moduleName)) {
+        continue;
+      }
       for (const modulePath of privateModulePaths(path, moduleName)) {
         if (readSource(modulePath) !== undefined) {
           pending.push(modulePath);
@@ -51,18 +54,35 @@ function auditStartupEntrypoints(readSource: SourceReader): string[] {
   return violations;
 }
 
-function privateModuleNames(source: string): string[] {
-  return [...source.matchAll(/(?:^|\n)\s*mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/g)].map(
-    (match) => match[1],
-  );
+function moduleNames(source: string): string[] {
+  return [
+    ...source.matchAll(
+      /(?:^|\n)\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/g,
+    ),
+  ].map((match) => match[1]);
 }
 
 function privateModulePaths(parentPath: string, moduleName: string): string[] {
-  const directory = parentPath.slice(0, parentPath.lastIndexOf("/"));
+  const childBase = childModuleBase(parentPath);
   return [
-    `${directory}/${moduleName}.rs`,
-    `${directory}/${moduleName}/mod.rs`,
+    `${childBase}/${moduleName}.rs`,
+    `${childBase}/${moduleName}/mod.rs`,
   ];
+}
+
+function childModuleBase(parentPath: string): string {
+  const directory = parentPath.slice(0, parentPath.lastIndexOf("/"));
+  if (parentPath.endsWith("/lib.rs") || parentPath.endsWith("/main.rs") || parentPath.endsWith("/mod.rs")) {
+    return directory;
+  }
+  return `${directory}/${parentPath.slice(parentPath.lastIndexOf("/") + 1, -3)}`;
+}
+
+function isCrateFoundation(parentPath: string, moduleName: string): boolean {
+  return (
+    parentPath === "src-tauri/src/lib.rs" &&
+    (moduleName === "audio" || moduleName === "pack")
+  );
 }
 
 function fixtureSources(overrides: Record<string, string> = {}) {
@@ -110,6 +130,28 @@ it("flags pack startup reached through a private module", () => {
   });
 
   expect(violations).toContain("src-tauri/src/startup.rs: PackManager");
+});
+
+it("flags integration in a private module nested below a file module", () => {
+  const violations = auditFixture({
+    "src-tauri/src/lib.rs": "mod startup;\npub fn run() {}",
+    "src-tauri/src/startup.rs": "mod engine;",
+    "src-tauri/src/startup/engine.rs":
+      "use crate::audio::AudioEngine;\nfn start() { AudioEngine::start(); }",
+  });
+
+  expect(violations).toContain("src-tauri/src/startup/engine.rs: AudioEngine");
+});
+
+it("flags integration in a public child of a reachable private commands module", () => {
+  const violations = auditFixture({
+    "src-tauri/src/lib.rs": "mod commands;\npub fn run() {}",
+    "src-tauri/src/commands/mod.rs": "pub mod startup;",
+    "src-tauri/src/commands/startup.rs":
+      "use crate::pack::PackManager;\nfn start() { PackManager::open(todo!()); }",
+  });
+
+  expect(violations).toContain("src-tauri/src/commands/startup.rs: PackManager");
 });
 
 it("does not scan foundational public module definitions", () => {
