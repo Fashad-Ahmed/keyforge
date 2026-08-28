@@ -156,6 +156,14 @@ pub(crate) struct SampleRegistry {
     limits: RegistryLimits,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RegistrySnapshot {
+    sample_count: usize,
+    registered_bytes: usize,
+    next_id: Option<u64>,
+}
+
 impl Default for SampleRegistry {
     fn default() -> Self {
         Self::with_limits(RegistryLimits::default())
@@ -180,30 +188,83 @@ impl SampleRegistry {
         }
     }
 
-    pub(crate) fn insert(&mut self, sample: PcmSample) -> Result<SampleId, RegisterSampleError> {
-        if self.samples.len() >= self.limits.max_samples {
+    pub(crate) fn insert_batch(
+        &mut self,
+        samples: Vec<PcmSample>,
+    ) -> Result<Vec<SampleId>, RegisterSampleError> {
+        if samples.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let final_count = self
+            .samples
+            .len()
+            .checked_add(samples.len())
+            .ok_or(RegisterSampleError::TooManySamples)?;
+        if final_count > self.limits.max_samples {
             return Err(RegisterSampleError::TooManySamples);
         }
-        let bytes = sample.byte_len();
-        let new_total = self
+
+        let added_bytes = samples.iter().try_fold(0_usize, |total, sample| {
+            total
+                .checked_add(sample.byte_len())
+                .ok_or(RegisterSampleError::MemoryLimitExceeded)
+        })?;
+        let final_bytes = self
             .registered_bytes
-            .checked_add(bytes)
+            .checked_add(added_bytes)
             .ok_or(RegisterSampleError::MemoryLimitExceeded)?;
-        if new_total > self.limits.max_bytes {
+        if final_bytes > self.limits.max_bytes {
             return Err(RegisterSampleError::MemoryLimitExceeded);
         }
-        let raw_id = self
+
+        let first = self
             .next_id
             .ok_or(RegisterSampleError::IdentifierExhausted)?;
-        self.next_id = raw_id.checked_add(1);
-        let id = SampleId(raw_id);
-        self.samples.insert(id, Arc::new(sample));
-        self.registered_bytes = new_total;
-        Ok(id)
+        let id_offset = u64::try_from(samples.len() - 1)
+            .map_err(|_| RegisterSampleError::IdentifierExhausted)?;
+        let last = first
+            .checked_add(id_offset)
+            .ok_or(RegisterSampleError::IdentifierExhausted)?;
+        let next = last.checked_add(1);
+        let ids: Vec<SampleId> = (first..=last).map(SampleId).collect();
+
+        for (id, sample) in ids.iter().copied().zip(samples) {
+            self.samples.insert(id, Arc::new(sample));
+        }
+        self.registered_bytes = final_bytes;
+        self.next_id = next;
+        Ok(ids)
+    }
+
+    pub(crate) fn insert(&mut self, sample: PcmSample) -> Result<SampleId, RegisterSampleError> {
+        self.insert_batch(vec![sample])?
+            .into_iter()
+            .next()
+            .ok_or(RegisterSampleError::IdentifierExhausted)
     }
 
     pub(crate) fn get(&self, id: SampleId) -> Option<Arc<PcmSample>> {
         self.samples.get(&id).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sample_count_for_test(&self) -> usize {
+        self.samples.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registered_bytes_for_test(&self) -> usize {
+        self.registered_bytes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot_for_test(&self) -> RegistrySnapshot {
+        RegistrySnapshot {
+            sample_count: self.sample_count_for_test(),
+            registered_bytes: self.registered_bytes_for_test(),
+            next_id: self.next_id,
+        }
     }
 }
 
@@ -293,5 +354,96 @@ mod tests {
             registry.insert(mono(vec![0.0]).unwrap()),
             Err(RegisterSampleError::IdentifierExhausted)
         );
+    }
+
+    #[test]
+    fn batch_insert_assigns_ordered_ids_and_accounts_memory_once() {
+        let mut registry = SampleRegistry::default();
+
+        let ids = registry
+            .insert_batch(vec![
+                mono(vec![0.1]).unwrap(),
+                mono(vec![0.2, 0.3]).unwrap(),
+            ])
+            .unwrap();
+
+        assert_eq!(ids, vec![SampleId(1), SampleId(2)]);
+        assert_eq!(registry.sample_count_for_test(), 2);
+        assert_eq!(registry.registered_bytes_for_test(), 12);
+    }
+
+    #[test]
+    fn failed_batch_leaves_registry_and_identifier_unchanged() {
+        let limits = RegistryLimits {
+            max_samples: 2,
+            max_bytes: 8,
+        };
+        let mut registry = SampleRegistry::with_limits(limits);
+        let before = registry.snapshot_for_test();
+
+        assert_eq!(
+            registry.insert_batch(vec![
+                mono(vec![0.1]).unwrap(),
+                mono(vec![0.2, 0.3]).unwrap()
+            ]),
+            Err(RegisterSampleError::MemoryLimitExceeded)
+        );
+        assert_eq!(registry.snapshot_for_test(), before);
+        assert_eq!(
+            registry.insert(mono(vec![0.4]).unwrap()).unwrap(),
+            SampleId(1)
+        );
+    }
+
+    #[test]
+    fn count_limited_batch_leaves_registry_and_identifier_unchanged() {
+        let mut registry = SampleRegistry::with_limits(RegistryLimits {
+            max_samples: 1,
+            max_bytes: 16,
+        });
+        let before = registry.snapshot_for_test();
+
+        assert_eq!(
+            registry.insert_batch(vec![mono(vec![0.1]).unwrap(), mono(vec![0.2]).unwrap()]),
+            Err(RegisterSampleError::TooManySamples)
+        );
+        assert_eq!(registry.snapshot_for_test(), before);
+    }
+
+    #[test]
+    fn batch_preflights_identifier_exhaustion_without_partial_insert() {
+        let mut registry = SampleRegistry::with_next_id_for_test(u64::MAX);
+        let before = registry.snapshot_for_test();
+
+        assert_eq!(
+            registry.insert_batch(vec![mono(vec![0.1]).unwrap(), mono(vec![0.2]).unwrap()]),
+            Err(RegisterSampleError::IdentifierExhausted)
+        );
+        assert_eq!(registry.snapshot_for_test(), before);
+    }
+
+    #[test]
+    fn batch_can_consume_the_final_identifier() {
+        let mut registry = SampleRegistry::with_next_id_for_test(u64::MAX - 1);
+
+        assert_eq!(
+            registry
+                .insert_batch(vec![mono(vec![0.1]).unwrap(), mono(vec![0.2]).unwrap()])
+                .unwrap(),
+            vec![SampleId(u64::MAX - 1), SampleId(u64::MAX)]
+        );
+        assert_eq!(
+            registry.insert(mono(vec![0.3]).unwrap()),
+            Err(RegisterSampleError::IdentifierExhausted)
+        );
+    }
+
+    #[test]
+    fn empty_batch_preserves_registry_state() {
+        let mut registry = SampleRegistry::default();
+        let before = registry.snapshot_for_test();
+
+        assert_eq!(registry.insert_batch(Vec::new()), Ok(Vec::new()));
+        assert_eq!(registry.snapshot_for_test(), before);
     }
 }
