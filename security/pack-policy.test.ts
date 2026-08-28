@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 
 import { expect, it } from "vitest";
 
-const ENTRYPOINTS = ["src-tauri/src/main.rs", "src-tauri/src/lib.rs"];
+const NATIVE_SOURCE_ROOT = "src-tauri/src";
 const FORBIDDEN_STARTUP_SYMBOLS = [
   "PackManager",
   "install_bundled_default",
@@ -13,22 +13,11 @@ const FORBIDDEN_STARTUP_SYMBOLS = [
   "register_samples",
 ] as const;
 
-type SourceReader = (path: string) => string | undefined;
-
-function auditStartupEntrypoints(readSource: SourceReader): string[] {
-  const pending = [...ENTRYPOINTS];
-  const visited = new Set<string>();
+function auditProductionSources(sources: ReadonlyMap<string, string>): string[] {
   const violations: string[] = [];
 
-  while (pending.length > 0) {
-    const path = pending.pop();
-    if (path === undefined || visited.has(path)) {
-      continue;
-    }
-    visited.add(path);
-
-    const source = readSource(path);
-    if (source === undefined) {
+  for (const [path, source] of sources) {
+    if (isFoundationalSource(path)) {
       continue;
     }
 
@@ -40,20 +29,33 @@ function auditStartupEntrypoints(readSource: SourceReader): string[] {
       }
     }
 
-    for (const moduleName of moduleNames(source)) {
-      if (isCrateFoundation(path, moduleName)) {
-        continue;
-      }
-      for (const modulePath of privateModulePaths(path, moduleName)) {
-        if (readSource(modulePath) !== undefined) {
-          pending.push(modulePath);
-          break;
-        }
-      }
-    }
   }
 
   return violations;
+}
+
+function isFoundationalSource(path: string): boolean {
+  return (
+    path === `${NATIVE_SOURCE_ROOT}/audio.rs` ||
+    path === `${NATIVE_SOURCE_ROOT}/pack.rs` ||
+    path.startsWith(`${NATIVE_SOURCE_ROOT}/audio/`) ||
+    path.startsWith(`${NATIVE_SOURCE_ROOT}/pack/`)
+  );
+}
+
+function readProductionSources(directory = NATIVE_SOURCE_ROOT): Map<string, string> {
+  const sources = new Map<string, string>();
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) {
+      for (const [childPath, source] of readProductionSources(path)) {
+        sources.set(childPath, source);
+      }
+    } else if (entry.isFile() && entry.name.endsWith(".rs")) {
+      sources.set(path, readFileSync(path, "utf8"));
+    }
+  }
+  return sources;
 }
 
 function sourceBypassViolations(path: string, source: string): string[] {
@@ -67,37 +69,6 @@ function sourceBypassViolations(path: string, source: string): string[] {
     violations.push(`${path}: include!`);
   }
   return violations;
-}
-
-function moduleNames(source: string): string[] {
-  return [
-    ...source.matchAll(
-      /(?:^|\n)\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/g,
-    ),
-  ].map((match) => match[1]);
-}
-
-function privateModulePaths(parentPath: string, moduleName: string): string[] {
-  const childBase = childModuleBase(parentPath);
-  return [
-    `${childBase}/${moduleName}.rs`,
-    `${childBase}/${moduleName}/mod.rs`,
-  ];
-}
-
-function childModuleBase(parentPath: string): string {
-  const directory = parentPath.slice(0, parentPath.lastIndexOf("/"));
-  if (parentPath.endsWith("/lib.rs") || parentPath.endsWith("/main.rs") || parentPath.endsWith("/mod.rs")) {
-    return directory;
-  }
-  return `${directory}/${parentPath.slice(parentPath.lastIndexOf("/") + 1, -3)}`;
-}
-
-function isCrateFoundation(parentPath: string, moduleName: string): boolean {
-  return (
-    parentPath === "src-tauri/src/lib.rs" &&
-    (moduleName === "audio" || moduleName === "pack")
-  );
 }
 
 function fixtureSources(overrides: Record<string, string> = {}) {
@@ -115,8 +86,7 @@ function fixtureSources(overrides: Record<string, string> = {}) {
 }
 
 function auditFixture(overrides: Record<string, string> = {}) {
-  const sources = fixtureSources(overrides);
-  return auditStartupEntrypoints((path) => sources.get(path));
+  return auditProductionSources(fixtureSources(overrides));
 }
 
 it("flags direct audio startup from main.rs", () => {
@@ -137,7 +107,18 @@ it("flags aliased audio startup imports", () => {
   expect(violations).toContain("src-tauri/src/main.rs: AudioEngine");
 });
 
-it("flags pack startup reached through a private module", () => {
+it("flags alias integration in an arbitrary nonconventional Rust source", () => {
+  const violations = auditFixture({
+    "src-tauri/src/deferred/launch_sequence.rs":
+      "use crate::audio::AudioEngine as Engine;\nfn start() { Engine::start(); }",
+  });
+
+  expect(violations).toContain(
+    "src-tauri/src/deferred/launch_sequence.rs: AudioEngine",
+  );
+});
+
+it("flags PackManager integration in a nonfoundational source", () => {
   const violations = auditFixture({
     "src-tauri/src/lib.rs": "mod startup;\npub fn run() {}",
     "src-tauri/src/startup.rs":
@@ -147,7 +128,7 @@ it("flags pack startup reached through a private module", () => {
   expect(violations).toContain("src-tauri/src/startup.rs: PackManager");
 });
 
-it("flags integration in a private module nested below a file module", () => {
+it("flags integration in a nested nonfoundational source", () => {
   const violations = auditFixture({
     "src-tauri/src/lib.rs": "mod startup;\npub fn run() {}",
     "src-tauri/src/startup.rs": "mod engine;",
@@ -158,7 +139,7 @@ it("flags integration in a private module nested below a file module", () => {
   expect(violations).toContain("src-tauri/src/startup/engine.rs: AudioEngine");
 });
 
-it("flags integration in a public child of a reachable private commands module", () => {
+it("flags integration in a command source regardless of module visibility", () => {
   const violations = auditFixture({
     "src-tauri/src/lib.rs": "mod commands;\npub fn run() {}",
     "src-tauri/src/commands/mod.rs": "pub mod startup;",
@@ -187,7 +168,7 @@ it("rejects module path override attributes without reading their paths", () => 
   );
 });
 
-it("rejects reachable include macro code injection", () => {
+it("rejects include macro code injection in an audited source", () => {
   const violations = auditFixture({
     "src-tauri/src/lib.rs": "mod startup;\npub fn run() {}",
     "src-tauri/src/startup.rs": 'include!("generated-startup.rs");',
@@ -200,12 +181,8 @@ it("does not scan foundational public module definitions", () => {
   expect(auditFixture()).toEqual([]);
 });
 
-it("keeps the sound-pack smoke path developer-only in production entrypoints", () => {
+it("keeps the sound-pack smoke path developer-only across production Rust sources", () => {
   expect(existsSync("src-tauri/examples/pack_smoke.rs")).toBe(true);
 
-  expect(
-    auditStartupEntrypoints((path) =>
-      existsSync(path) ? readFileSync(path, "utf8") : undefined,
-    ),
-  ).toEqual([]);
+  expect(auditProductionSources(readProductionSources())).toEqual([]);
 });
