@@ -38,6 +38,13 @@ impl TestRoot {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
+
+    pub(crate) fn write_file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        assert_eq!(Path::new(name).components().count(), 1);
+        let path = self.path.join(name);
+        fs::write(&path, bytes).unwrap();
+        path
+    }
 }
 
 impl Drop for TestRoot {
@@ -152,6 +159,16 @@ pub(crate) fn valid_pack_entries() -> Vec<(String, Vec<u8>)> {
 
 pub(crate) fn valid_pack_zip() -> Vec<u8> {
     zip_with_entries(CompressionMethod::Stored, valid_pack_entries())
+}
+
+pub(crate) fn valid_pack_zip_with_identity(id: &str, name: &str) -> Vec<u8> {
+    let mut entries = valid_pack_entries();
+    let manifest = String::from_utf8(entries[0].1.clone())
+        .unwrap()
+        .replace("keyforge-mechanical", id)
+        .replace("KeyForge Mechanical", name);
+    entries[0].1 = manifest.into_bytes();
+    zip_with_entries(CompressionMethod::Stored, entries)
 }
 
 pub(crate) fn zip_missing_referenced_wav() -> Vec<u8> {

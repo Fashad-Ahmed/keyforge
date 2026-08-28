@@ -783,7 +783,7 @@ mod tests {
     fn top_level_error_text_is_sanitized() {
         assert_eq!(
             PackInstallError::Archive(PackArchiveError::Path).to_string(),
-            "sound-pack installation failed: archive"
+            "sound-pack installation failed: invalid archive"
         );
         assert_eq!(
             PackInstallError::Manifest(PackManifestError::Json).to_string(),
