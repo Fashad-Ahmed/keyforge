@@ -9,6 +9,7 @@ mod storage;
 use std::{
     fmt,
     fs::File,
+    io::Cursor,
     path::{Path, PathBuf},
 };
 
@@ -32,6 +33,8 @@ pub use storage::PackStorageError;
 pub(crate) use storage::{PackStorage, StoredDecodedPack, StoredPackMetadata};
 
 pub const MAX_DECODED_PACK_BYTES: usize = 64 * 1024 * 1024;
+
+const BUNDLED_DEFAULT_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-mechanical.zip");
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ValidatedPack {
@@ -323,6 +326,15 @@ impl PackManager {
             .map_err(PackInstallError::from)
     }
 
+    pub fn install_bundled_default(&self) -> Result<InstalledPack, PackInstallError> {
+        let cursor = Cursor::new(BUNDLED_DEFAULT_PACK);
+        let pack = validate_archive(cursor, BUNDLED_DEFAULT_PACK.len() as u64)?;
+        self.storage
+            .install_validated(pack)
+            .map(InstalledPack::from)
+            .map_err(PackInstallError::from)
+    }
+
     pub fn discover(&self) -> Result<Vec<InstalledPack>, PackStorageError> {
         let mut packs = self
             .storage
@@ -384,6 +396,24 @@ mod tests {
     };
 
     const MAX_REGISTERED_BYTES: usize = 128 * 1024 * 1024;
+
+    #[test]
+    fn bundled_default_uses_the_production_validator() {
+        let root = TestRoot::new();
+        let manager = PackManager::open(root.path().join("managed")).unwrap();
+
+        let installed = manager.install_bundled_default().unwrap();
+
+        assert_eq!(installed.id().as_str(), "keyforge-mechanical");
+        assert_eq!(installed.variant_counts().normal(), 3);
+        assert_eq!(installed.variant_counts().space(), 1);
+        assert_eq!(installed.variant_counts().enter(), 1);
+        assert_eq!(installed.variant_counts().backspace(), 1);
+        assert_eq!(installed.variant_counts().modifier(), 1);
+        let decoded = manager.decode(installed.id()).unwrap();
+        assert_eq!(decoded.metadata(), &installed);
+        assert_eq!(decoded.metadata().variant_counts().total(), 7);
+    }
 
     #[test]
     fn manager_installs_discovers_decodes_and_registers_in_fixed_group_order() {
