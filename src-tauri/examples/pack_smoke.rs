@@ -9,7 +9,7 @@ use std::{
 
 use keyforge_lib::{
     audio::{AudioEngine, AudioEngineHandle, AudioEngineStatus, SampleId},
-    pack::{PackManager, RegisteredPack},
+    pack::{DecodedPack, PackManager, RegisteredPack},
 };
 
 const TEMP_ROOT_PREFIX: &str = "keyforge-pack-smoke-";
@@ -125,6 +125,94 @@ fn main() -> Result<(), SmokeError> {
     }
 }
 
+trait SmokeLifecycleBackend {
+    fn start(&mut self) -> Result<(), SmokeError>;
+    fn register(&mut self) -> Result<(), SmokeError>;
+    fn wait_until_ready(&mut self) -> Result<(), SmokeError>;
+    fn play(&mut self) -> Result<(), SmokeError>;
+    fn shutdown(&mut self) -> Result<(), SmokeError>;
+}
+
+struct ProductionSmokeBackend {
+    decoded: Option<DecodedPack>,
+    engine: Option<AudioEngine>,
+    handle: Option<AudioEngineHandle>,
+    registered: Option<RegisteredPack>,
+}
+
+impl ProductionSmokeBackend {
+    fn new(decoded: DecodedPack) -> Self {
+        Self {
+            decoded: Some(decoded),
+            engine: None,
+            handle: None,
+            registered: None,
+        }
+    }
+}
+
+impl SmokeLifecycleBackend for ProductionSmokeBackend {
+    fn start(&mut self) -> Result<(), SmokeError> {
+        let engine = AudioEngine::start().map_err(|_| SmokeError::AudioStartFailed)?;
+        self.handle = Some(engine.handle());
+        self.engine = Some(engine);
+        Ok(())
+    }
+
+    fn register(&mut self) -> Result<(), SmokeError> {
+        let decoded = self
+            .decoded
+            .take()
+            .ok_or(SmokeError::PackRegistrationFailed)?;
+        let handle = self
+            .handle
+            .as_ref()
+            .ok_or(SmokeError::PackRegistrationFailed)?;
+        self.registered = Some(
+            decoded
+                .register(handle)
+                .map_err(|_| SmokeError::PackRegistrationFailed)?,
+        );
+        Ok(())
+    }
+
+    fn wait_until_ready(&mut self) -> Result<(), SmokeError> {
+        let handle = self
+            .handle
+            .as_ref()
+            .ok_or(SmokeError::AudioOutputUnavailable)?;
+        wait_until_ready(handle)
+    }
+
+    fn play(&mut self) -> Result<(), SmokeError> {
+        let handle = self.handle.as_ref().ok_or(SmokeError::PlaybackFailed)?;
+        let registered = self.registered.as_ref().ok_or(SmokeError::PlaybackFailed)?;
+        play_registered_pack(handle, registered)
+    }
+
+    fn shutdown(&mut self) -> Result<(), SmokeError> {
+        let engine = self.engine.take().ok_or(SmokeError::AudioShutdownFailed)?;
+        let result = engine
+            .shutdown()
+            .map_err(|_| SmokeError::AudioShutdownFailed);
+        self.handle = None;
+        self.registered = None;
+        result
+    }
+}
+
+fn run_audio_lifecycle(backend: &mut impl SmokeLifecycleBackend) -> Result<(), SmokeError> {
+    backend.start()?;
+    let smoke_result = (|| {
+        backend.register()?;
+        backend.wait_until_ready()?;
+        backend.play()
+    })();
+    let shutdown_result = backend.shutdown();
+
+    smoke_result.and(shutdown_result)
+}
+
 fn run_smoke(root: &Path) -> Result<(), SmokeError> {
     let manager =
         PackManager::open(root.to_path_buf()).map_err(|_| SmokeError::PackStorageUnavailable)?;
@@ -134,21 +222,8 @@ fn run_smoke(root: &Path) -> Result<(), SmokeError> {
     let decoded = manager
         .decode(installed.id())
         .map_err(|_| SmokeError::PackDecodeFailed)?;
-    let engine = AudioEngine::start().map_err(|_| SmokeError::AudioStartFailed)?;
-    let handle = engine.handle();
-    let smoke_result = (|| {
-        let registered = decoded
-            .register(&handle)
-            .map_err(|_| SmokeError::PackRegistrationFailed)?;
-        wait_until_ready(&handle)?;
-        play_registered_pack(&handle, &registered)
-    })();
-    let shutdown_result = engine
-        .shutdown()
-        .map_err(|_| SmokeError::AudioShutdownFailed);
-
-    smoke_result?;
-    shutdown_result
+    let mut backend = ProductionSmokeBackend::new(decoded);
+    run_audio_lifecycle(&mut backend)
 }
 
 fn play_registered_pack(
@@ -237,7 +312,144 @@ fn play_sample(handle: &AudioEngineHandle, sample: SampleId) -> Result<(), Smoke
 mod tests {
     use std::time::Duration;
 
-    use super::{wait_for_ready_with, AudioEngineStatus, SmokeError, READY_TIMEOUT};
+    use super::{
+        run_audio_lifecycle, wait_for_ready_with, AudioEngineStatus, SmokeError,
+        SmokeLifecycleBackend, READY_TIMEOUT,
+    };
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum LifecycleCall {
+        Start,
+        Register,
+        Wait,
+        Play,
+        Shutdown,
+    }
+
+    struct FakeLifecycleBackend {
+        calls: Vec<LifecycleCall>,
+        failure: Option<LifecycleCall>,
+    }
+
+    impl FakeLifecycleBackend {
+        fn succeeds() -> Self {
+            Self {
+                calls: Vec::new(),
+                failure: None,
+            }
+        }
+
+        fn fails_at(failure: LifecycleCall) -> Self {
+            Self {
+                calls: Vec::new(),
+                failure: Some(failure),
+            }
+        }
+
+        fn record(&mut self, call: LifecycleCall, error: SmokeError) -> Result<(), SmokeError> {
+            self.calls.push(call);
+            if self.failure == Some(call) {
+                Err(error)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl SmokeLifecycleBackend for FakeLifecycleBackend {
+        fn start(&mut self) -> Result<(), SmokeError> {
+            self.record(LifecycleCall::Start, SmokeError::AudioStartFailed)
+        }
+
+        fn register(&mut self) -> Result<(), SmokeError> {
+            self.record(LifecycleCall::Register, SmokeError::PackRegistrationFailed)
+        }
+
+        fn wait_until_ready(&mut self) -> Result<(), SmokeError> {
+            self.record(LifecycleCall::Wait, SmokeError::AudioOutputUnavailable)
+        }
+
+        fn play(&mut self) -> Result<(), SmokeError> {
+            self.record(LifecycleCall::Play, SmokeError::PlaybackFailed)
+        }
+
+        fn shutdown(&mut self) -> Result<(), SmokeError> {
+            self.record(LifecycleCall::Shutdown, SmokeError::AudioShutdownFailed)
+        }
+    }
+
+    #[test]
+    fn runs_the_real_smoke_lifecycle_in_required_order() {
+        let mut backend = FakeLifecycleBackend::succeeds();
+
+        let result = run_audio_lifecycle(&mut backend);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            backend.calls,
+            [
+                LifecycleCall::Start,
+                LifecycleCall::Register,
+                LifecycleCall::Wait,
+                LifecycleCall::Play,
+                LifecycleCall::Shutdown,
+            ]
+        );
+    }
+
+    #[test]
+    fn shuts_down_after_registration_fails() {
+        let mut backend = FakeLifecycleBackend::fails_at(LifecycleCall::Register);
+
+        let result = run_audio_lifecycle(&mut backend);
+
+        assert!(matches!(result, Err(SmokeError::PackRegistrationFailed)));
+        assert_eq!(
+            backend.calls,
+            [
+                LifecycleCall::Start,
+                LifecycleCall::Register,
+                LifecycleCall::Shutdown,
+            ]
+        );
+    }
+
+    #[test]
+    fn shuts_down_after_waiting_for_ready_fails() {
+        let mut backend = FakeLifecycleBackend::fails_at(LifecycleCall::Wait);
+
+        let result = run_audio_lifecycle(&mut backend);
+
+        assert!(matches!(result, Err(SmokeError::AudioOutputUnavailable)));
+        assert_eq!(
+            backend.calls,
+            [
+                LifecycleCall::Start,
+                LifecycleCall::Register,
+                LifecycleCall::Wait,
+                LifecycleCall::Shutdown,
+            ]
+        );
+    }
+
+    #[test]
+    fn shuts_down_after_playback_fails() {
+        let mut backend = FakeLifecycleBackend::fails_at(LifecycleCall::Play);
+
+        let result = run_audio_lifecycle(&mut backend);
+
+        assert!(matches!(result, Err(SmokeError::PlaybackFailed)));
+        assert_eq!(
+            backend.calls,
+            [
+                LifecycleCall::Start,
+                LifecycleCall::Register,
+                LifecycleCall::Wait,
+                LifecycleCall::Play,
+                LifecycleCall::Shutdown,
+            ]
+        );
+    }
 
     #[test]
     fn rejects_ready_exactly_at_the_deadline_after_a_previous_poll() {

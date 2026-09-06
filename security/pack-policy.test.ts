@@ -30,21 +30,49 @@ function auditProductionSources(sources: ReadonlyMap<string, string>): string[] 
 
   for (const [path, source] of sources) {
     if (isFoundationalSource(path)) {
+      if (hasRawIdentifier(source, "macro_export")) {
+        violations.push(`${path}: exported macro declaration`);
+      }
       continue;
     }
 
-    const tokens = rustTokens(source);
-    violations.push(...sourceBypassViolations(path, tokens));
-    violations.push(...moduleReferenceViolations(path, tokens));
+    const auditedSource = withoutApprovedFoundationDeclarations(path, source);
+
+    for (const root of ["audio", "pack"] as const) {
+      if (hasRawIdentifier(auditedSource, root)) {
+        violations.push(`${path}: ${root} module reference`);
+      }
+    }
+
+    if (hasRawIdentifier(auditedSource, "path")) {
+      violations.push(`${path}: module path override`);
+    }
+    if (hasRawIdentifier(auditedSource, "include")) {
+      violations.push(`${path}: include!`);
+    }
 
     for (const symbol of FORBIDDEN_STARTUP_SYMBOLS) {
-      if (tokens.includes(symbol)) {
+      if (hasRawIdentifier(auditedSource, symbol)) {
         violations.push(`${path}: ${symbol}`);
       }
     }
   }
 
   return violations;
+}
+
+function withoutApprovedFoundationDeclarations(path: string, source: string): string {
+  if (path !== `${NATIVE_SOURCE_ROOT}/lib.rs`) {
+    return source;
+  }
+
+  return source.replace("pub mod audio;", "").replace("pub mod pack;", "");
+}
+
+function hasRawIdentifier(source: string, identifier: string): boolean {
+  return new RegExp(
+    `(^|[^A-Za-z0-9_])${identifier}([^A-Za-z0-9_]|$)`,
+  ).test(source);
 }
 
 function isFoundationalSource(path: string): boolean {
@@ -81,209 +109,6 @@ function readProductionSources(directory = NATIVE_SOURCE_ROOT): Map<string, stri
   return sources;
 }
 
-function sourceBypassViolations(path: string, tokens: string[]): string[] {
-  const violations: string[] = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (tokens[index] !== "#" || tokens[index + 1] !== "[") {
-      continue;
-    }
-    const end = matchingDelimiter(tokens, index + 1, "[", "]");
-    if (end === undefined) {
-      violations.push(`${path}: malformed attribute`);
-      continue;
-    }
-    const attribute = tokens.slice(index + 2, end);
-    if (
-      (attribute[0] === "path" && attribute.includes("=")) ||
-      (attribute[0] === "cfg_attr" && containsAssignment(attribute, "path"))
-    ) {
-      violations.push(`${path}: module path override`);
-    }
-    index = end;
-  }
-
-  const includeAliases = new Set(["include"]);
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (tokens[index] !== "use") {
-      continue;
-    }
-    const end = tokens.indexOf(";", index + 1);
-    const importTokens = tokens.slice(index + 1, end === -1 ? tokens.length : end);
-    if (!importTokens.includes("include")) {
-      continue;
-    }
-    violations.push(`${path}: include import`);
-    const asIndex = importTokens.lastIndexOf("as");
-    if (asIndex !== -1 && isIdentifier(importTokens[asIndex + 1])) {
-      includeAliases.add(importTokens[asIndex + 1]);
-    }
-  }
-  for (let index = 0; index < tokens.length - 1; index += 1) {
-    if (includeAliases.has(tokens[index]) && tokens[index + 1] === "!") {
-      violations.push(`${path}: include!`);
-    }
-  }
-  return violations;
-}
-
-function moduleReferenceViolations(path: string, tokens: string[]): string[] {
-  const approvedDeclarations = new Set<number>();
-  let braceDepth = 0;
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (
-      path === `${NATIVE_SOURCE_ROOT}/lib.rs` &&
-      braceDepth === 0 &&
-      tokens[index] === "pub" &&
-      tokens[index + 1] === "mod" &&
-      (tokens[index + 2] === "audio" || tokens[index + 2] === "pack") &&
-      tokens[index + 3] === ";"
-    ) {
-      approvedDeclarations.add(index + 2);
-    }
-    if (tokens[index] === "{") {
-      braceDepth += 1;
-    } else if (tokens[index] === "}") {
-      braceDepth -= 1;
-    }
-  }
-
-  const violations: string[] = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if ((token === "audio" || token === "pack") && !approvedDeclarations.has(index)) {
-      violations.push(`${path}: ${token} module reference`);
-    }
-  }
-  return violations;
-}
-
-function containsAssignment(tokens: string[], identifier: string): boolean {
-  return tokens.some(
-    (token, index) => token === identifier && tokens[index + 1] === "=",
-  );
-}
-
-function matchingDelimiter(
-  tokens: string[],
-  start: number,
-  open: string,
-  close: string,
-): number | undefined {
-  let depth = 0;
-  for (let index = start; index < tokens.length; index += 1) {
-    if (tokens[index] === open) {
-      depth += 1;
-    } else if (tokens[index] === close) {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return undefined;
-}
-
-function rustTokens(source: string): string[] {
-  const tokens: string[] = [];
-  let index = 0;
-  while (index < source.length) {
-    const character = source[index];
-    if (/\s/.test(character)) {
-      index += 1;
-    } else if (source.startsWith("//", index)) {
-      index = source.indexOf("\n", index + 2);
-      if (index === -1) {
-        break;
-      }
-    } else if (source.startsWith("/*", index)) {
-      index = skipBlockComment(source, index);
-    } else {
-      const rawStringEnd = rawStringEndIndex(source, index);
-      if (rawStringEnd !== undefined) {
-        index = rawStringEnd;
-      } else if (character === '"' || character === "'") {
-        index = skipQuotedLiteral(source, index, character);
-      } else if (isIdentifierStart(character)) {
-        const start = index;
-        index += 1;
-        while (index < source.length && isIdentifierPart(source[index])) {
-          index += 1;
-        }
-        tokens.push(source.slice(start, index));
-      } else {
-        tokens.push(character);
-        index += 1;
-      }
-    }
-  }
-  return tokens;
-}
-
-function skipBlockComment(source: string, index: number): number {
-  let depth = 1;
-  index += 2;
-  while (index < source.length && depth > 0) {
-    if (source.startsWith("/*", index)) {
-      depth += 1;
-      index += 2;
-    } else if (source.startsWith("*/", index)) {
-      depth -= 1;
-      index += 2;
-    } else {
-      index += 1;
-    }
-  }
-  return index;
-}
-
-function rawStringEndIndex(source: string, start: number): number | undefined {
-  let index = start;
-  if (source[index] === "b") {
-    index += 1;
-  }
-  if (source[index] !== "r") {
-    return undefined;
-  }
-  index += 1;
-  let hashes = 0;
-  while (source[index] === "#") {
-    hashes += 1;
-    index += 1;
-  }
-  if (source[index] !== '"') {
-    return undefined;
-  }
-  const terminator = `"${"#".repeat(hashes)}`;
-  const end = source.indexOf(terminator, index + 1);
-  return end === -1 ? source.length : end + terminator.length;
-}
-
-function skipQuotedLiteral(source: string, index: number, quote: string): number {
-  index += 1;
-  while (index < source.length) {
-    if (source[index] === "\\") {
-      index += 2;
-    } else if (source[index] === quote) {
-      return index + 1;
-    } else {
-      index += 1;
-    }
-  }
-  return index;
-}
-
-function isIdentifierStart(value: string | undefined): boolean {
-  return value !== undefined && /[A-Za-z_]/.test(value);
-}
-
-function isIdentifierPart(value: string | undefined): boolean {
-  return value !== undefined && /[A-Za-z0-9_]/.test(value);
-}
-
-function isIdentifier(value: string | undefined): value is string {
-  return value !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
-}
-
 function fixtureSources(overrides: Record<string, string> = {}) {
   return new Map<string, string>([
     ["src-tauri/src/main.rs", "fn main() {}"],
@@ -309,13 +134,6 @@ function withTempTree(action: (root: string) => void) {
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
-}
-
-function smokeOrderViolations(source: string): string[] {
-  const start = source.indexOf("AudioEngine::start");
-  const register = source.indexOf(".register(&handle)");
-  const ready = source.indexOf("wait_until_ready(&handle)");
-  return start < register && register < ready ? [] : ["pack smoke lifecycle order"];
 }
 
 it("flags direct audio startup from main.rs", () => {
@@ -344,6 +162,28 @@ it("flags alias integration in an arbitrary nonconventional Rust source", () => 
 
   expect(violations).toContain(
     "src-tauri/src/deferred/launch_sequence.rs: AudioEngine",
+  );
+});
+
+it("flags a forbidden audio root reference after a compiling lifetime", () => {
+  const violations = auditFixture({
+    "src-tauri/src/deferred/lifetime_launch.rs":
+      "fn launch<'engine>() { let _ = crate::audio::AudioEngine::start(); }",
+  });
+
+  expect(violations).toContain(
+    "src-tauri/src/deferred/lifetime_launch.rs: audio module reference",
+  );
+});
+
+it("flags a forbidden pack root reference inside a compiling loop label", () => {
+  const violations = auditFixture({
+    "src-tauri/src/deferred/label_launch.rs":
+      "fn launch() { 'launch: loop { let _ = crate::pack::PackManager::open(todo!()); break; } }",
+  });
+
+  expect(violations).toContain(
+    "src-tauri/src/deferred/label_launch.rs: pack module reference",
   );
 });
 
@@ -508,15 +348,39 @@ it("rejects symlinked directories without following them", () => {
   });
 });
 
-it("keeps pack smoke registration before waiting for readiness", () => {
-  const smokeSource = readFileSync("src-tauri/examples/pack_smoke.rs", "utf8");
+it("rejects crate-root macro wrappers exported from the audio foundation", () => {
+  const violations = auditFixture({
+    "src-tauri/src/audio/mod.rs":
+      "#[macro_export]\nmacro_rules! boot_native { () => { let _ = $crate::audio::AudioEngine::start(); } }",
+    "src-tauri/src/lib.rs":
+      "pub mod audio;\npub mod pack;\npub fn run() { crate::boot_native!(); }",
+  });
 
-  expect(smokeOrderViolations(smokeSource)).toEqual([]);
+  expect(violations).toContain(
+    "src-tauri/src/audio/mod.rs: exported macro declaration",
+  );
+});
+
+it("rejects comment-separated macro exports in nested pack foundations", () => {
+  const violations = auditFixture({
+    "src-tauri/src/pack/export.rs":
+      "#[ /* review */ macro_export /* review */ ]\nmacro_rules! open_native { () => { let _ = $crate::pack::PackManager::open(todo!()); } }",
+    "src-tauri/src/lib.rs":
+      "pub mod audio;\npub mod pack;\npub fn run() { crate::open_native!(); }",
+  });
+
+  expect(violations).toContain(
+    "src-tauri/src/pack/export.rs: exported macro declaration",
+  );
+});
+
+it("allows internal non-exported macros in foundational sources", () => {
   expect(
-    smokeOrderViolations(
-      "AudioEngine::start(); wait_until_ready(&handle); decoded.register(&handle);",
-    ),
-  ).toEqual(["pack smoke lifecycle order"]);
+    auditFixture({
+      "src-tauri/src/audio/internal.rs":
+        "macro_rules! build_stream { () => { 1_u8 } }\nfn use_it() { let _ = build_stream!(); }",
+    }),
+  ).toEqual([]);
 });
 
 it("does not scan foundational public module definitions", () => {
