@@ -137,10 +137,10 @@ fn run_smoke(root: &Path) -> Result<(), SmokeError> {
     let engine = AudioEngine::start().map_err(|_| SmokeError::AudioStartFailed)?;
     let handle = engine.handle();
     let smoke_result = (|| {
-        wait_until_ready(&handle)?;
         let registered = decoded
             .register(&handle)
             .map_err(|_| SmokeError::PackRegistrationFailed)?;
+        wait_until_ready(&handle)?;
         play_registered_pack(&handle, &registered)
     })();
     let shutdown_result = engine
@@ -168,19 +168,37 @@ fn play_registered_pack(
 }
 
 fn wait_until_ready(handle: &AudioEngineHandle) -> Result<(), SmokeError> {
-    let deadline = Instant::now() + READY_TIMEOUT;
+    let started = Instant::now();
+    wait_for_ready_with(|| handle.status(), || started.elapsed(), thread::sleep)
+}
+
+fn wait_for_ready_with<Status, Elapsed, Sleep>(
+    mut status: Status,
+    mut elapsed: Elapsed,
+    mut sleep: Sleep,
+) -> Result<(), SmokeError>
+where
+    Status: FnMut() -> AudioEngineStatus,
+    Elapsed: FnMut() -> Duration,
+    Sleep: FnMut(Duration),
+{
+    let mut has_polled = false;
     loop {
-        match handle.status() {
+        if has_polled && elapsed() >= READY_TIMEOUT {
+            return Err(SmokeError::AudioOutputUnavailable);
+        }
+        match status() {
             AudioEngineStatus::Ready => return Ok(()),
             AudioEngineStatus::Unavailable | AudioEngineStatus::Stopped => {
                 return Err(SmokeError::AudioOutputUnavailable);
             }
             AudioEngineStatus::Starting | AudioEngineStatus::Recovering => {}
         }
-        if Instant::now() >= deadline {
+        if elapsed() >= READY_TIMEOUT {
             return Err(SmokeError::AudioOutputUnavailable);
         }
-        thread::sleep(READY_POLL_DELAY);
+        sleep(READY_POLL_DELAY);
+        has_polled = true;
     }
 }
 
@@ -213,4 +231,27 @@ fn play_sample(handle: &AudioEngineHandle, sample: SampleId) -> Result<(), Smoke
         .map_err(|_| SmokeError::PlaybackFailed)?;
     thread::sleep(PLAYBACK_DELAY);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{wait_for_ready_with, AudioEngineStatus, SmokeError, READY_TIMEOUT};
+
+    #[test]
+    fn rejects_ready_exactly_at_the_deadline_after_a_previous_poll() {
+        let mut statuses = [AudioEngineStatus::Starting, AudioEngineStatus::Ready].into_iter();
+        let mut elapsed = [Duration::ZERO, READY_TIMEOUT].into_iter();
+        let mut sleeps = 0;
+
+        let result = wait_for_ready_with(
+            || statuses.next().unwrap(),
+            || elapsed.next().unwrap(),
+            |_| sleeps += 1,
+        );
+
+        assert!(matches!(result, Err(SmokeError::AudioOutputUnavailable)));
+        assert_eq!(sleeps, 1);
+    }
 }
