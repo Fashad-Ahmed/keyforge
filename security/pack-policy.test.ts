@@ -50,6 +50,9 @@ function auditProductionSources(sources: ReadonlyMap<string, string>): string[] 
     if (hasRawIdentifier(auditedSource, "include")) {
       violations.push(`${path}: include!`);
     }
+    if (hasRawIdentifier(auditedSource, "macro_use")) {
+      violations.push(`${path}: macro_use`);
+    }
 
     for (const symbol of FORBIDDEN_STARTUP_SYMBOLS) {
       if (hasRawIdentifier(auditedSource, symbol)) {
@@ -66,7 +69,13 @@ function withoutApprovedFoundationDeclarations(path: string, source: string): st
     return source;
   }
 
-  return source.replace("pub mod audio;", "").replace("pub mod pack;", "");
+  const firstBlock = source.indexOf("{");
+  const headerEnd = firstBlock === -1 ? source.length : firstBlock;
+  const header = source
+    .slice(0, headerEnd)
+    .replace(/^pub mod audio;\r?$/m, "")
+    .replace(/^pub mod pack;\r?$/m, "");
+  return header + source.slice(headerEnd);
 }
 
 function hasRawIdentifier(source: string, identifier: string): boolean {
@@ -84,24 +93,32 @@ function isFoundationalSource(path: string): boolean {
   );
 }
 
-function readProductionSources(directory = NATIVE_SOURCE_ROOT): Map<string, string> {
+function readProductionSources(
+  directory = NATIVE_SOURCE_ROOT,
+  logicalDirectory = directory,
+): Map<string, string> {
   const sources = new Map<string, string>();
   const metadata = lstatSync(directory);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
     throw new Error("unsafe source tree entry");
   }
+  const logicalRoot = logicalDirectory.replaceAll("\\", "/").replace(/\/+$/, "");
   for (const entry of readdirSync(directory)) {
-    const path = `${directory}/${entry}`;
-    const entryMetadata = lstatSync(path);
+    const filesystemPath = join(directory, entry);
+    const logicalPath = `${logicalRoot}/${entry}`;
+    const entryMetadata = lstatSync(filesystemPath);
     if (entryMetadata.isSymbolicLink()) {
       throw new Error("unsafe source tree entry");
     }
     if (entryMetadata.isDirectory()) {
-      for (const [childPath, source] of readProductionSources(path)) {
+      for (const [childPath, source] of readProductionSources(
+        filesystemPath,
+        logicalPath,
+      )) {
         sources.set(childPath, source);
       }
-    } else if (entryMetadata.isFile() && path.endsWith(".rs")) {
-      sources.set(path, readFileSync(path, "utf8"));
+    } else if (entryMetadata.isFile() && entry.endsWith(".rs")) {
+      sources.set(logicalPath, readFileSync(filesystemPath, "utf8"));
     } else if (!entryMetadata.isFile()) {
       throw new Error("unsafe source tree entry");
     }
@@ -319,7 +336,32 @@ it("collects the exact nested Rust source set", () => {
     writeFileSync(join(root, "nested", "ignored.txt"), "ignored");
 
     expect([...readProductionSources(root).keys()].sort()).toEqual(
-      [join(root, "main.rs"), join(root, "nested", "worker.rs")].sort(),
+      [
+        `${root.replaceAll("\\", "/")}/main.rs`,
+        `${root.replaceAll("\\", "/")}/nested/worker.rs`,
+      ].sort(),
+    );
+  });
+});
+
+it("keeps logical policy keys normalized across Windows-like separators", () => {
+  withTempTree((root) => {
+    mkdirSync(join(root, "nested"));
+    writeFileSync(join(root, "main.rs"), "fn main() {}");
+    writeFileSync(join(root, "nested", "worker.rs"), "fn worker() {}");
+
+    expect(
+      [
+        ...readProductionSources(
+          root,
+          String.raw`C:\workspace\keyforge\src-tauri\src`,
+        ).keys(),
+      ].sort(),
+    ).toEqual(
+      [
+        "C:/workspace/keyforge/src-tauri/src/main.rs",
+        "C:/workspace/keyforge/src-tauri/src/nested/worker.rs",
+      ].sort(),
     );
   });
 });
@@ -359,6 +401,28 @@ it("rejects crate-root macro wrappers exported from the audio foundation", () =>
   expect(violations).toContain(
     "src-tauri/src/audio/mod.rs: exported macro declaration",
   );
+});
+
+it("rejects macro_use imports from the audio foundation", () => {
+  const violations = auditFixture({
+    "src-tauri/src/audio/mod.rs":
+      "macro_rules! boot_native { () => { let _ = $crate::audio::AudioEngine::start(); } }",
+    "src-tauri/src/lib.rs":
+      "#[macro_use]\npub mod audio;\npub mod pack;\npub fn run() { boot_native!(); }",
+  });
+
+  expect(violations).toContain("src-tauri/src/lib.rs: macro_use");
+});
+
+it("rejects macro_use imports from the pack foundation", () => {
+  const violations = auditFixture({
+    "src-tauri/src/pack/mod.rs":
+      "macro_rules! open_native { () => { let _ = $crate::pack::PackManager::open(todo!()); } }",
+    "src-tauri/src/lib.rs":
+      "pub mod audio;\n#[macro_use] pub mod pack;\npub fn run() { open_native!(); }",
+  });
+
+  expect(violations).toContain("src-tauri/src/lib.rs: macro_use");
 });
 
 it("rejects comment-separated macro exports in nested pack foundations", () => {
