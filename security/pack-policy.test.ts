@@ -32,6 +32,8 @@ const EXPECTED_PACK_DEPENDENCIES = [
   'serde_json = "1.0"',
   'zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }',
 ] as const;
+const EXPECTED_WINDOWS_IDENTITY_DEPENDENCY =
+  'windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }';
 const FORBIDDEN_STARTUP_SYMBOLS = [
   "PackManager",
   "install_bundled_default",
@@ -190,6 +192,12 @@ function enumerateFiles(directory: string): string[] {
 function packDependencyViolations(cargoToml: string): string[] {
   return EXPECTED_PACK_DEPENDENCIES.filter(
     (record) => !cargoToml.split(/\r?\n/u).includes(record),
+  );
+}
+
+function unstableWindowsStorageApiViolations(source: string): string[] {
+  return ["volume_serial_number", "file_index"].filter((identifier) =>
+    new RegExp(`\\.${identifier}\\s*\\(`, "u").test(source),
   );
 }
 
@@ -579,6 +587,18 @@ it("locks the exact direct sound-pack dependency records", () => {
       ),
     ),
   ).toContain(EXPECTED_PACK_DEPENDENCIES[2]);
+});
+
+it("uses only stable Windows storage identity APIs", () => {
+  const storageSource = readFileSync("src-tauri/src/pack/storage.rs", "utf8");
+  const cargoToml = readFileSync("src-tauri/Cargo.toml", "utf8");
+  expect(unstableWindowsStorageApiViolations(storageSource)).toEqual([]);
+  expect(cargoToml.split(/\r?\n/u)).toContain(EXPECTED_WINDOWS_IDENTITY_DEPENDENCY);
+  expect(
+    unstableWindowsStorageApiViolations(
+      "metadata.volume_serial_number(); metadata.file_index();",
+    ),
+  ).toEqual(["volume_serial_number", "file_index"]);
 });
 
 it("keeps capabilities empty and the handler allowlist exact", () => {

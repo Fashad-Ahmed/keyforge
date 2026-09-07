@@ -605,13 +605,17 @@ mod tests {
             ("backspace", "\"backspace\": [\"sounds/backspace-01.wav\"],"),
             ("modifier", "\"modifier\": [\"sounds/modifier-01.wav\"]"),
         ] {
-            let absent = String::from_utf8(valid_manifest_json())
+            let mut absent: serde_json::Value =
+                serde_json::from_slice(&valid_manifest_json()).unwrap();
+            absent
+                .get_mut("sounds")
+                .and_then(serde_json::Value::as_object_mut)
                 .unwrap()
-                .replace(entry, "");
-            assert_eq!(
-                parse_manifest(absent.as_bytes()),
-                Err(PackManifestError::Json)
-            );
+                .remove(group);
+            let absent = serde_json::to_vec(&absent).unwrap();
+            serde_json::from_slice::<serde_json::Value>(&absent)
+                .expect("missing-group fixture must remain valid JSON");
+            assert_eq!(parse_manifest(&absent), Err(PackManifestError::Json));
 
             let empty = String::from_utf8(valid_manifest_json()).unwrap().replace(
                 entry,

@@ -125,7 +125,7 @@ impl PackStorage {
         let root = fs::canonicalize(&root).map_err(|_| PackStorageError::InvalidRoot)?;
         let metadata = fs::symlink_metadata(&root).map_err(|_| PackStorageError::InvalidRoot)?;
         let root_fingerprint =
-            RootFingerprint::from_metadata(&metadata).ok_or(PackStorageError::InvalidRoot)?;
+            RootFingerprint::from_path(&root, &metadata).ok_or(PackStorageError::InvalidRoot)?;
         Ok(Self {
             root,
             root_fingerprint,
@@ -277,8 +277,8 @@ impl PackStorage {
             return Err(PackStorageError::RootIdentity);
         }
         let canonical = fs::canonicalize(&self.root).map_err(|_| PackStorageError::RootIdentity)?;
-        let fingerprint =
-            RootFingerprint::from_metadata(&metadata).ok_or(PackStorageError::RootIdentity)?;
+        let fingerprint = RootFingerprint::from_path(&self.root, &metadata)
+            .ok_or(PackStorageError::RootIdentity)?;
         if canonical != self.root || fingerprint != self.root_fingerprint {
             return Err(PackStorageError::RootIdentity);
         }
@@ -732,7 +732,7 @@ struct RootFingerprint {
 
 #[cfg(unix)]
 impl RootFingerprint {
-    fn from_metadata(metadata: &Metadata) -> Option<Self> {
+    fn from_path(_: &Path, metadata: &Metadata) -> Option<Self> {
         use std::os::unix::fs::MetadataExt;
 
         Some(Self {
@@ -745,18 +745,47 @@ impl RootFingerprint {
 #[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RootFingerprint {
-    volume_serial_number: u32,
-    file_index: u64,
+    volume_serial_number: u64,
+    file_id: [u8; 16],
 }
 
 #[cfg(windows)]
 impl RootFingerprint {
-    fn from_metadata(metadata: &Metadata) -> Option<Self> {
-        use std::os::windows::fs::MetadataExt;
+    fn from_path(path: &Path, _: &Metadata) -> Option<Self> {
+        use std::{ffi::c_void, mem::size_of, os::windows::io::AsRawHandle};
 
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{
+            Foundation::HANDLE,
+            Storage::FileSystem::{
+                FileIdInfo, GetFileInformationByHandleEx, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO,
+                FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            },
+        };
+
+        let handle = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .ok()?;
+        let mut information = FILE_ID_INFO::default();
+        // SAFETY: `handle` remains open for the call, `information` is a valid
+        // writable FILE_ID_INFO, and the buffer size matches its concrete type.
+        let succeeded = unsafe {
+            GetFileInformationByHandleEx(
+                handle.as_raw_handle() as HANDLE,
+                FileIdInfo,
+                (&raw mut information).cast::<c_void>(),
+                u32::try_from(size_of::<FILE_ID_INFO>()).ok()?,
+            )
+        };
+        if succeeded == 0 {
+            return None;
+        }
         Some(Self {
-            volume_serial_number: metadata.volume_serial_number()?,
-            file_index: metadata.file_index()?,
+            volume_serial_number: information.VolumeSerialNumber,
+            file_id: information.FileId.Identifier,
         })
     }
 }
@@ -767,7 +796,7 @@ struct RootFingerprint;
 
 #[cfg(not(any(unix, windows)))]
 impl RootFingerprint {
-    fn from_metadata(_: &Metadata) -> Option<Self> {
+    fn from_path(_: &Path, _: &Metadata) -> Option<Self> {
         Some(Self)
     }
 }
@@ -924,7 +953,7 @@ mod tests {
         ));
         drop(first_guard);
 
-        let second_guard = second_storage.try_mutation_guard_for_test().unwrap();
+        let second_guard = second_storage.mutation_guard().unwrap();
         drop(second_guard);
     }
 

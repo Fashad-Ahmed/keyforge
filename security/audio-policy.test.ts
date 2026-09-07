@@ -214,6 +214,19 @@ const APPROVED_DEPENDENCIES = [
     registry: null,
     path: null,
   },
+  {
+    name: "windows-sys",
+    rename: null,
+    source: CRATES_IO_SOURCE,
+    req: "^0.61.2",
+    kind: null,
+    optional: false,
+    uses_default_features: true,
+    features: ["Win32_Foundation", "Win32_Storage_FileSystem"],
+    target: "cfg(windows)",
+    registry: null,
+    path: null,
+  },
 ];
 
 function projectPath(path: string): string {
