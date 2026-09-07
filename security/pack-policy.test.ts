@@ -15,6 +15,23 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 
 const NATIVE_SOURCE_ROOT = "src-tauri/src";
+const EXPECTED_PACK_FILES = [
+  "src-tauri/src/pack/archive.rs",
+  "src-tauri/src/pack/decoder.rs",
+  "src-tauri/src/pack/manifest.rs",
+  "src-tauri/src/pack/mod.rs",
+  "src-tauri/src/pack/storage.rs",
+  "src-tauri/src/pack/test_support.rs",
+] as const;
+const EXPECTED_ASSETS = [
+  "src-tauri/assets/packs/README.md",
+  "src-tauri/assets/packs/keyforge-mechanical.zip",
+] as const;
+const EXPECTED_PACK_DEPENDENCIES = [
+  'hound = "3.5.1"',
+  'serde_json = "1.0"',
+  'zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }',
+] as const;
 const FORBIDDEN_STARTUP_SYMBOLS = [
   "PackManager",
   "install_bundled_default",
@@ -151,6 +168,80 @@ function withTempTree(action: (root: string) => void) {
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+}
+
+function enumerateFiles(directory: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(directory)) {
+    const path = join(directory, entry);
+    const metadata = lstatSync(path);
+    if (metadata.isSymbolicLink() || (!metadata.isFile() && !metadata.isDirectory())) {
+      throw new Error("unsafe reviewed tree entry");
+    }
+    if (metadata.isDirectory()) {
+      files.push(...enumerateFiles(path));
+    } else {
+      files.push(path.replaceAll("\\", "/"));
+    }
+  }
+  return files.sort();
+}
+
+function packDependencyViolations(cargoToml: string): string[] {
+  return EXPECTED_PACK_DEPENDENCIES.filter(
+    (record) => !cargoToml.split(/\r?\n/u).includes(record),
+  );
+}
+
+function exactFileSetViolations(actual: string[], expected: readonly string[]): string[] {
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  return [
+    ...actual.filter((path) => !expectedSet.has(path)),
+    ...expected.filter((path) => !actualSet.has(path)),
+  ].sort();
+}
+
+function nativeBoundaryViolations(capability: string, libSource: string): string[] {
+  const violations: string[] = [];
+  const parsed = JSON.parse(capability) as { permissions?: unknown };
+  if (!Array.isArray(parsed.permissions) || parsed.permissions.length !== 0) {
+    violations.push("capabilities must remain empty");
+  }
+  const handlers = [...libSource.matchAll(/generate_handler!\s*\[([^\]]*)\]/gu)];
+  if (
+    handlers.length !== 1 ||
+    handlers[0]?.[1]?.trim() !== "commands::app_info::get_app_info"
+  ) {
+    violations.push("handler allowlist changed");
+  }
+  return violations;
+}
+
+function ciViolations(workflow: string): string[] {
+  const required = [
+    "os: [ubuntu-24.04, macos-15, windows-2025]",
+    "cargo metadata --locked",
+    "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
+  ];
+  return required.filter((text) => !workflow.includes(text));
+}
+
+function missingDocumentationPhrases(documents: string[]): string[] {
+  const combined = documents.join("\n").toLowerCase();
+  const required = [
+    "16 mib compressed archive limit",
+    "cross-platform traversal",
+    "canonical signed-16 pcm wav",
+    "same-parent staging",
+    "duplicate pack ids",
+    "decoded pcm only",
+    "no sound-pack ipc",
+    "no application networking",
+  ];
+  return required.filter((phrase) => !combined.includes(phrase));
 }
 
 it("flags direct audio startup from main.rs", () => {
@@ -455,4 +546,76 @@ it("keeps the sound-pack smoke path developer-only across production Rust source
   expect(existsSync("src-tauri/examples/pack_smoke.rs")).toBe(true);
 
   expect(auditProductionSources(readProductionSources())).toEqual([]);
+});
+
+it("keeps the reviewed pack source and asset sets exact", () => {
+  expect(exactFileSetViolations(enumerateFiles("src-tauri/src/pack"), EXPECTED_PACK_FILES)).toEqual(
+    [],
+  );
+  expect(exactFileSetViolations(enumerateFiles("src-tauri/assets/packs"), EXPECTED_ASSETS)).toEqual(
+    [],
+  );
+  expect(
+    enumerateFiles("src-tauri/assets/packs").every(
+      (path) => path.endsWith(".md") || path === EXPECTED_ASSETS[1],
+    ),
+  ).toBe(true);
+});
+
+it("rejects hidden or executable-looking pack assets", () => {
+  expect(
+    exactFileSetViolations([...EXPECTED_ASSETS, "src-tauri/assets/packs/.hidden"], EXPECTED_ASSETS),
+  ).toContain("src-tauri/assets/packs/.hidden");
+  expect(EXPECTED_ASSETS.some((path) => /\.(?:exe|dll|dylib|so|js|sh)$/u.test(path))).toBe(false);
+});
+
+it("locks the exact direct sound-pack dependency records", () => {
+  expect(packDependencyViolations(readFileSync("src-tauri/Cargo.toml", "utf8"))).toEqual([]);
+  expect(
+    packDependencyViolations(
+      readFileSync("src-tauri/Cargo.toml", "utf8").replace(
+        'features = ["deflate-flate2-zlib-rs"]',
+        'features = ["deflate-flate2-zlib-rs", "bzip2"]',
+      ),
+    ),
+  ).toContain(EXPECTED_PACK_DEPENDENCIES[2]);
+});
+
+it("keeps capabilities empty and the handler allowlist exact", () => {
+  const capability = readFileSync("src-tauri/capabilities/main.json", "utf8");
+  const libSource = readFileSync("src-tauri/src/lib.rs", "utf8");
+  expect(nativeBoundaryViolations(capability, libSource)).toEqual([]);
+  expect(nativeBoundaryViolations('{"permissions":["core:event:default"]}', libSource)).toContain(
+    "capabilities must remain empty",
+  );
+  expect(
+    nativeBoundaryViolations(
+      capability,
+      libSource.replace(
+        "commands::app_info::get_app_info]",
+        "commands::app_info::get_app_info, commands::packs::install]",
+      ),
+    ),
+  ).toContain("handler allowlist changed");
+});
+
+it("keeps locked cross-platform Rust CI quality gates", () => {
+  const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+  expect(ciViolations(workflow)).toEqual([]);
+  expect(ciViolations(workflow.replace("cargo test --locked", "cargo test"))).toContain(
+    "cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets",
+  );
+});
+
+it("documents the implemented sound-pack security boundary", () => {
+  expect(
+    missingDocumentationPhrases([
+      readFileSync("README.md", "utf8"),
+      readFileSync("docs/architecture/trust-boundaries.md", "utf8"),
+      readFileSync("docs/security/threat-model.md", "utf8"),
+    ]),
+  ).toEqual([]);
+  expect(missingDocumentationPhrases(["no application networking"])).toContain(
+    "cross-platform traversal",
+  );
 });

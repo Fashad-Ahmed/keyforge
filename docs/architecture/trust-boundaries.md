@@ -20,11 +20,15 @@ Raw keyboard events, key history, and typed content must never cross this bounda
 
 All pack files are untrusted input.
 
-The pack manager must validate paths, file types, sizes, metadata, and audio decoding before use.
+The local ZIP path exists only inside native pack-manager calls. Raw archive names are lexically validated before any filesystem join, including cross-platform traversal and Windows device-name rejection. The importer enforces a 16 MiB compressed archive limit plus entry, expanded-data, duration, and decoded-memory limits.
 
-## Boundary 5: Future Pack Manager → Audio Registry
+Complete manifest validation and audio decoding happen before same-parent staging. Installed content contains canonical JSON and canonical signed-16 PCM WAV files only. Duplicate pack IDs are rejected without replacing existing files.
 
-The future pack manager may pass only validated, decoded PCM into the native audio registry. Encoded audio bytes and file-system paths never reach the engine.
+## Boundary 5: Pack Manager → Audio Registry
+
+The pack manager passes decoded PCM only into the native audio registry, and only opaque `SampleId` values leave it. Encoded audio bytes, archive names, decoder errors, and filesystem paths never reach the engine.
+
+There is no sound-pack IPC: no pack path, archive bytes, WAV bytes, PCM samples, or decoder diagnostics cross the Tauri boundary. There is no application networking.
 
 ## Boundary 6: Build System → Release Artifact
 

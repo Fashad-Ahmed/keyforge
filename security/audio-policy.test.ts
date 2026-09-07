@@ -1107,12 +1107,12 @@ it("rejects quoted escaped job permissions that the former reader ignored", () =
   expect(() => assertWorkflowPolicy(workflow)).toThrow();
 });
 
-it("documents M2 startup and later ownership exclusions", () => {
+it("documents M3 startup and later ownership exclusions", () => {
   const readme = read("README.md");
   expect(readme).toContain(
-    "`AudioEngine` is not constructed during ordinary Tauri startup in Milestone 2.",
+    "`AudioEngine` and `PackManager` are not constructed during ordinary Tauri startup.",
   );
-  expect(readme).toContain("Milestone 3 owns sound-pack loading and decoding.");
+  expect(readme).toContain("There is no sound-pack IPC and no application networking.");
   expect(readme).toContain("Milestone 4 owns sanitized input integration.");
   expect(readme).toContain("Milestone 6 owns product UI and persistent volume.");
 });
