@@ -23,6 +23,20 @@ pub(crate) struct KeyForgeRuntime {
 }
 
 impl KeyForgeRuntime {
+    pub(crate) fn new_unavailable() -> Self {
+        Self {
+            inner: Mutex::new(RuntimeInner {
+                sound_enabled: true,
+                volume: ValidatedVolume::new(1.0).expect("default volume is valid"),
+            }),
+            audio_status: RuntimeAudioStatus::Unavailable,
+            input_status: RuntimeInputStatus::Unavailable,
+            pack_id: "keyforge-mechanical".to_string(),
+            pack_name: "KeyForge Mechanical".to_string(),
+            group_counts: RuntimeGroupCounts::new(3, 1, 1, 1, 1),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_test() -> Self {
         Self {

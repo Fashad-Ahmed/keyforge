@@ -100,7 +100,8 @@ const REVIEWED_WORKFLOW_LINES = [
 ];
 
 const PROJECT_ROOT = process.cwd();
-const ALLOWED_HANDLER = "tauri::generate_handler![commands::app_info::get_app_info]";
+const ALLOWED_HANDLER =
+  "tauri::generate_handler![commands::app_info::get_app_info,commands::runtime::get_runtime_status,commands::runtime::set_sound_enabled,commands::runtime::set_master_volume]";
 const ALLOWED_ACTIONS = [
   "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
   "pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa",
@@ -823,7 +824,7 @@ function nativeIpcFixture(): Map<string, string> {
   return new Map([
     [
       "src-tauri/src/lib.rs",
-      "tauri::Builder::default().invoke_handler(tauri::generate_handler![commands::app_info::get_app_info]);",
+      "tauri::Builder::default().invoke_handler(tauri::generate_handler![commands::app_info::get_app_info,commands::runtime::get_runtime_status,commands::runtime::set_sound_enabled,commands::runtime::set_master_volume]);",
     ],
   ]);
 }
