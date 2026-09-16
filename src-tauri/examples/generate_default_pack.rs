@@ -8,7 +8,7 @@ use std::{
 };
 
 use hound::{SampleFormat, WavSpec, WavWriter};
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+use zip::{write::SimpleFileOptions, CompressionMethod, System, ZipWriter};
 
 const SAMPLE_RATE: u32 = 48_000;
 const Q15_ONE: i64 = 32_767;
@@ -190,6 +190,7 @@ fn generate_archive() -> Result<Vec<u8>, GeneratorError> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Stored)
+        .system(System::Unix)
         .unix_permissions(0o100644);
 
     writer
@@ -344,7 +345,7 @@ mod tests {
     };
 
     use hound::{SampleFormat, WavReader};
-    use zip::{CompressionMethod, ZipArchive};
+    use zip::{CompressionMethod, System, ZipArchive};
 
     use super::{generate_archive, parse_output_argument, write_archive, GeneratorError};
 
@@ -392,6 +393,10 @@ mod tests {
         let second = generate_archive().unwrap();
 
         assert_eq!(first, second);
+        assert_eq!(
+            central_directory_creator_systems(&first),
+            vec![System::Unix as u8; EXPECTED_ENTRIES.len()]
+        );
 
         let mut archive = ZipArchive::new(Cursor::new(first)).unwrap();
         assert_eq!(archive.comment(), b"");
@@ -403,6 +408,16 @@ mod tests {
             assert_eq!(entry.unix_mode(), Some(0o100644));
             assert_eq!(entry.comment(), "");
         }
+    }
+
+    fn central_directory_creator_systems(archive: &[u8]) -> Vec<u8> {
+        archive
+            .windows(4)
+            .enumerate()
+            .filter_map(|(offset, signature)| {
+                (signature == [0x50, 0x4b, 0x01, 0x02]).then(|| archive[offset + 5])
+            })
+            .collect()
     }
 
     #[test]
