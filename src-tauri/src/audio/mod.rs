@@ -274,13 +274,16 @@ impl Drop for AudioEngine {
 
 impl AudioEngineHandle {
     #[cfg(test)]
-    fn new_for_test() -> Self {
+    pub(crate) fn new_for_test() -> Self {
         let shared = Arc::new(SharedState::new());
         shared.activate_stream_generation(TEST_STREAM_GENERATION);
         Self { shared }
     }
 
-    pub fn register_sample(&self, sample: PcmSample) -> Result<SampleId, RegisterSampleError> {
+    pub fn register_samples(
+        &self,
+        samples: Vec<PcmSample>,
+    ) -> Result<Vec<SampleId>, RegisterSampleError> {
         if self.shared.shutdown.load(Ordering::Acquire) {
             return Err(RegisterSampleError::RegistryUnavailable);
         }
@@ -288,7 +291,14 @@ impl AudioEngineHandle {
             .registry
             .lock()
             .map_err(|_| RegisterSampleError::RegistryUnavailable)?
-            .insert(sample)
+            .insert_batch(samples)
+    }
+
+    pub fn register_sample(&self, sample: PcmSample) -> Result<SampleId, RegisterSampleError> {
+        self.register_samples(vec![sample])?
+            .into_iter()
+            .next()
+            .ok_or(RegisterSampleError::IdentifierExhausted)
     }
 
     pub fn play(&self, sample_id: SampleId) -> Result<(), PlayError> {
@@ -336,7 +346,11 @@ impl AudioEngineHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{
+        panic::{catch_unwind, AssertUnwindSafe},
+        sync::atomic::Ordering,
+        thread,
+    };
 
     use super::*;
 
@@ -384,6 +398,87 @@ mod tests {
         let command = handle.shared.commands.pop().unwrap();
         assert_eq!(command.sample_id(), id);
         assert_eq!(command.stream_generation(), TEST_STREAM_GENERATION);
+    }
+
+    #[test]
+    fn registers_batches_in_order_and_single_registration_follows_them() {
+        let handle = handle();
+
+        assert_eq!(
+            handle
+                .register_samples(vec![sample(0.1), sample(0.2)])
+                .unwrap(),
+            vec![
+                SampleId::from_raw_for_test(1),
+                SampleId::from_raw_for_test(2)
+            ]
+        );
+        assert_eq!(
+            handle.register_sample(sample(0.3)).unwrap(),
+            SampleId::from_raw_for_test(3)
+        );
+    }
+
+    #[test]
+    fn empty_batch_is_empty_only_while_the_handle_is_running() {
+        let handle = handle();
+        let before = handle.shared.registry.lock().unwrap().snapshot_for_test();
+
+        assert_eq!(handle.register_samples(Vec::new()), Ok(Vec::new()));
+        assert_eq!(
+            handle.shared.registry.lock().unwrap().snapshot_for_test(),
+            before
+        );
+
+        handle.shared.shutdown.store(true, Ordering::Release);
+
+        assert_eq!(
+            handle.register_samples(Vec::new()),
+            Err(RegisterSampleError::RegistryUnavailable)
+        );
+        assert_eq!(
+            handle.shared.registry.lock().unwrap().snapshot_for_test(),
+            before
+        );
+    }
+
+    #[test]
+    fn stopped_handle_rejects_nonempty_batches_without_mutating_registry() {
+        let handle = handle();
+        let before = handle.shared.registry.lock().unwrap().snapshot_for_test();
+        handle.shared.shutdown.store(true, Ordering::Release);
+
+        assert_eq!(
+            handle.register_samples(vec![sample(0.2)]),
+            Err(RegisterSampleError::RegistryUnavailable)
+        );
+        assert_eq!(
+            handle.shared.registry.lock().unwrap().snapshot_for_test(),
+            before
+        );
+    }
+
+    #[test]
+    fn poisoned_registry_rejects_batches_without_mutating_registry() {
+        let handle = handle();
+        let registered = handle.register_sample(sample(0.1)).unwrap();
+        let before = handle.shared.registry.lock().unwrap().snapshot_for_test();
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let _registry = handle.shared.registry.lock().unwrap();
+            panic!("poison the sample registry");
+        }));
+        assert!(panic_result.is_err());
+
+        assert_eq!(
+            handle.register_samples(vec![sample(0.2)]),
+            Err(RegisterSampleError::RegistryUnavailable)
+        );
+        let registry = match handle.shared.registry.lock() {
+            Err(error) => error.into_inner(),
+            Ok(_) => panic!("sample registry lock was not poisoned"),
+        };
+        assert_eq!(registry.snapshot_for_test(), before);
+        assert_eq!(registry.get(registered).unwrap().samples(), &[0.1]);
     }
 
     #[test]

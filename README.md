@@ -2,7 +2,7 @@
 
 KeyForge is a free, open-source, privacy-first keyboard sound engine for macOS, Windows, and Linux.
 
-This repository currently contains Milestone 2: a secure Tauri 2 desktop foundation with a statically exported Next.js presentation layer and a native Rust audio engine. Keyboard capture, sound-pack loading, production audio controls, autostart, updates, and networking are intentionally not implemented yet.
+This repository currently contains Milestone 3: a secure Tauri 2 desktop foundation, a statically exported Next.js presentation layer, a native Rust audio engine, and a native sound-pack importer. Keyboard capture, production UI controls, autostart, updates, community features, and application networking are intentionally not implemented yet.
 
 ## Architecture
 
@@ -13,9 +13,12 @@ This repository currently contains Milestone 2: a secure Tauri 2 desktop foundat
 - The main window has no built-in Tauri core permissions.
 - The audio engine accepts validated, decoded PCM only; encoded audio bytes and file paths are outside its boundary.
 - Its fixed mixer supports 32 simultaneous voices, and master volume is validated and held only in memory.
-- The audio engine has no production IPC or UI integration in Milestone 2.
-- `AudioEngine` is not constructed during ordinary Tauri startup in Milestone 2.
-- Milestone 3 owns sound-pack loading and decoding.
+- The audio engine and pack manager have no production IPC or UI integration in Milestone 3.
+- `AudioEngine` and `PackManager` are not constructed during ordinary Tauri startup.
+- Sound packs contain data only: one strict JSON manifest and signed-16 PCM WAV files for normal, Space, Enter, Backspace, and Modifier groups.
+- Imports enforce a 16 MiB compressed archive limit, reject cross-platform traversal, decode before same-parent staging, and reject duplicate pack IDs without replacement.
+- Installed audio is rewritten as canonical signed-16 PCM WAV; the audio registry receives decoded PCM only.
+- There is no sound-pack IPC and no application networking.
 - Milestone 4 owns sanitized input integration.
 - Milestone 6 owns product UI and persistent volume.
 - The application contains no telemetry, analytics, accounts, or runtime networking.
@@ -47,6 +50,14 @@ cargo run --locked --manifest-path src-tauri/Cargo.toml --example audio_smoke
 ```
 
 Warning: this command emits a short tone through the default output device. It is a manual developer check, not a production integration path.
+
+To manually validate the bundled pack import and playback path:
+
+```bash
+cargo run --locked --manifest-path src-tauri/Cargo.toml --example pack_smoke
+```
+
+Warning: this developer command plays a short sequence through the default output device. It uses a test-owned temporary pack directory and is not part of production Tauri startup.
 
 ## Verification
 

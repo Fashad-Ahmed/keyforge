@@ -137,6 +137,19 @@ const APPROVED_DEPENDENCIES = [
     path: null,
   },
   {
+    name: "hound",
+    rename: null,
+    source: CRATES_IO_SOURCE,
+    req: "^3.5.1",
+    kind: null,
+    optional: false,
+    uses_default_features: true,
+    features: [],
+    target: null,
+    registry: null,
+    path: null,
+  },
+  {
     name: "serde",
     rename: null,
     source: CRATES_IO_SOURCE,
@@ -145,6 +158,19 @@ const APPROVED_DEPENDENCIES = [
     optional: false,
     uses_default_features: true,
     features: ["derive"],
+    target: null,
+    registry: null,
+    path: null,
+  },
+  {
+    name: "serde_json",
+    rename: null,
+    source: CRATES_IO_SOURCE,
+    req: "^1.0",
+    kind: null,
+    optional: false,
+    uses_default_features: true,
+    features: [],
     target: null,
     registry: null,
     path: null,
@@ -172,6 +198,32 @@ const APPROVED_DEPENDENCIES = [
     uses_default_features: true,
     features: [],
     target: null,
+    registry: null,
+    path: null,
+  },
+  {
+    name: "zip",
+    rename: null,
+    source: CRATES_IO_SOURCE,
+    req: "^8.6.0",
+    kind: null,
+    optional: false,
+    uses_default_features: false,
+    features: ["deflate-flate2-zlib-rs"],
+    target: null,
+    registry: null,
+    path: null,
+  },
+  {
+    name: "windows-sys",
+    rename: null,
+    source: CRATES_IO_SOURCE,
+    req: "^0.61.2",
+    kind: null,
+    optional: false,
+    uses_default_features: true,
+    features: ["Win32_Foundation", "Win32_Storage_FileSystem"],
+    target: "cfg(windows)",
     registry: null,
     path: null,
   },
@@ -756,6 +808,17 @@ function approvedDependencyFixture(): CargoDependency[] {
   }));
 }
 
+function dependencyByName(
+  dependencies: CargoDependency[],
+  name: string,
+): CargoDependency {
+  const dependency = dependencies.find((candidate) => candidate.name === name);
+  if (!dependency) {
+    throw new Error(`missing dependency fixture: ${name}`);
+  }
+  return dependency;
+}
+
 function nativeIpcFixture(): Map<string, string> {
   return new Map([
     [
@@ -849,8 +912,18 @@ it("rejects Cargo dependency aliases, additions, and feature mutations", () => {
   expect(() => assertCargoDependencyPolicy(addition)).toThrow("complete records");
 
   const featureChange = approvedDependencyFixture();
-  featureChange[3].features.push("devtools");
+  dependencyByName(featureChange, "tauri").features.push("devtools");
   expect(() => assertCargoDependencyPolicy(featureChange)).toThrow("complete records");
+});
+
+it("rejects broadened sound-pack dependency features", () => {
+  const defaults = approvedDependencyFixture();
+  dependencyByName(defaults, "zip").uses_default_features = true;
+  expect(() => assertCargoDependencyPolicy(defaults)).toThrow("complete records");
+
+  const codec = approvedDependencyFixture();
+  dependencyByName(codec, "zip").features.push("zstd");
+  expect(() => assertCargoDependencyPolicy(codec)).toThrow("complete records");
 });
 
 it("rejects local path dependency origins", () => {
@@ -1047,12 +1120,12 @@ it("rejects quoted escaped job permissions that the former reader ignored", () =
   expect(() => assertWorkflowPolicy(workflow)).toThrow();
 });
 
-it("documents M2 startup and later ownership exclusions", () => {
+it("documents M3 startup and later ownership exclusions", () => {
   const readme = read("README.md");
   expect(readme).toContain(
-    "`AudioEngine` is not constructed during ordinary Tauri startup in Milestone 2.",
+    "`AudioEngine` and `PackManager` are not constructed during ordinary Tauri startup.",
   );
-  expect(readme).toContain("Milestone 3 owns sound-pack loading and decoding.");
+  expect(readme).toContain("There is no sound-pack IPC and no application networking.");
   expect(readme).toContain("Milestone 4 owns sanitized input integration.");
   expect(readme).toContain("Milestone 6 owns product UI and persistent volume.");
 });
