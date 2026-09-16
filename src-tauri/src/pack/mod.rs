@@ -625,6 +625,34 @@ mod tests {
     #[test]
     fn manager_adds_no_tauri_frontend_or_startup_boundary() {
         let source = include_str!("../lib.rs");
+
+        assert!(source_has_unchanged_run_boundary(source));
+        assert!(!source.contains("PackManager::open"));
+        assert!(!source.contains("install_zip"));
+        assert!(!source.contains("register_samples"));
+    }
+
+    #[test]
+    fn run_boundary_source_check_accepts_windows_line_endings() {
+        let source = concat!(
+            "pub fn run() {\r\n",
+            "    tauri::Builder::default()\r\n",
+            "        .",
+            "invoke_",
+            "handler",
+            "(tauri::",
+            "generate_",
+            "handler!",
+            "[commands::app_info::get_app_info])\r\n",
+            "        .run(tauri::generate_context!())\r\n",
+            "        .expect(\"error while running tauri application\");\r\n",
+            "}\r\n",
+        );
+
+        assert!(source_has_unchanged_run_boundary(source));
+    }
+
+    fn source_has_unchanged_run_boundary(source: &str) -> bool {
         let handler_macro = concat!("generate_", "handler!");
         let invoke_handler = concat!("invoke_", "handler");
         let unchanged_run = format!(
@@ -636,10 +664,7 @@ mod tests {
 }}"#
         );
 
-        assert!(source.contains(&unchanged_run));
-        assert!(!source.contains("PackManager::open"));
-        assert!(!source.contains("install_zip"));
-        assert!(!source.contains("register_samples"));
+        source.replace("\r\n", "\n").contains(&unchanged_run)
     }
 
     fn fill_registry_leaving_one_float(handle: &AudioEngineHandle) {
