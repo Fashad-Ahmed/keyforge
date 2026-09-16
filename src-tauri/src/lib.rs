@@ -1,6 +1,8 @@
 pub mod audio;
 mod commands;
+pub mod input;
 pub mod pack;
+mod runtime;
 
 #[cfg(test)]
 mod test_alloc;
