@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 type PlaybackControlsProps = {
   enabled: boolean;
@@ -11,7 +11,13 @@ type PlaybackControlsProps = {
 
 export function PlaybackControls({ enabled, enabledPending, volume, volumePending, onEnabledChange, onVolumeChange }: PlaybackControlsProps) {
   const [draftVolume, setDraftVolume] = useState(volume);
-  useEffect(() => setDraftVolume(volume), [volume]);
+  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!volumePending) setDraftVolume(volume);
+  }, [volume, volumePending]);
+  useEffect(() => () => {
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+  }, []);
   const percentage = Math.round(draftVolume * 100);
   return (
     <section className="controls-panel" aria-labelledby="controls-title">
@@ -24,10 +30,11 @@ export function PlaybackControls({ enabled, enabledPending, volume, volumePendin
       </div>
       <div className="volume-control">
         <div className="volume-label"><label htmlFor="master-volume">Output</label><output htmlFor="master-volume">{percentage}</output></div>
-        <input aria-label="Volume" disabled={volumePending} id="master-volume" max="100" min="0" onChange={(event) => {
+        <input aria-busy={volumePending} aria-label="Volume" id="master-volume" max="100" min="0" onChange={(event) => {
           const nextVolume = Number(event.currentTarget.value) / 100;
           setDraftVolume(nextVolume);
-          onVolumeChange(nextVolume);
+          if (commitTimer.current) clearTimeout(commitTimer.current);
+          commitTimer.current = setTimeout(() => onVolumeChange(nextVolume), 90);
         }} style={{ "--volume": `${percentage}%` } as CSSProperties} type="range" value={percentage} />
       </div>
     </section>

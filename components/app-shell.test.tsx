@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { AppShell } from "./app-shell";
@@ -171,7 +171,7 @@ it("updates master volume through the native runtime", async () => {
   const slider = await screen.findByRole("slider", { name: "Volume" });
   fireEvent.change(slider, { target: { value: "25" } });
 
-  expect(setMasterVolumeMock).toHaveBeenCalledWith(0.25);
+  await waitFor(() => expect(setMasterVolumeMock).toHaveBeenCalledWith(0.25));
 });
 
 it("renders the approved private precision hierarchy and local library", async () => {
@@ -239,7 +239,8 @@ it("moves the volume slider immediately while native persistence is pending", as
   fireEvent.change(slider, { target: { value: "37" } });
 
   expect(slider).toHaveValue("37");
-  expect(setMasterVolumeMock).toHaveBeenCalledWith(0.37);
+  expect(slider).toBeEnabled();
+  await waitFor(() => expect(setMasterVolumeMock).toHaveBeenCalledWith(0.37));
 });
 
 it("keeps the active instrument visible when catalog discovery is unavailable", async () => {

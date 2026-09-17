@@ -82,6 +82,7 @@ impl KeyForgeRuntime {
     fn try_start(app_data_dir: PathBuf) -> Result<Self, RuntimeStartError> {
         let audio_engine = AudioEngine::start().map_err(|_| RuntimeStartError::Audio)?;
         let audio_handle = audio_engine.handle();
+        prepare_app_data_directory(&app_data_dir)?;
         let settings_store = SettingsStore::open(app_data_dir.clone());
         let loaded_settings = settings_store.load();
         let settings = loaded_settings.settings().clone();
@@ -428,6 +429,10 @@ enum RuntimeStartError {
     Register,
 }
 
+fn prepare_app_data_directory(path: &std::path::Path) -> Result<(), RuntimeStartError> {
+    std::fs::create_dir_all(path).map_err(|_| RuntimeStartError::Pack)
+}
+
 fn play_sanitized_event(
     inner: &Arc<Mutex<RuntimeInner>>,
     audio_handle: &AudioEngineHandle,
@@ -501,6 +506,22 @@ mod tests {
         let mut runtime = KeyForgeRuntime::new_for_test();
         runtime.settings_store = Some(SettingsStore::open(path.clone()));
         (runtime, path)
+    }
+
+    #[test]
+    fn prepares_a_missing_application_data_directory_before_pack_storage() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "keyforge-runtime-root-test-{}-{}",
+                std::process::id(),
+                SETTINGS_TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join("nested");
+
+        prepare_app_data_directory(&path).unwrap();
+
+        assert!(path.is_dir());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
