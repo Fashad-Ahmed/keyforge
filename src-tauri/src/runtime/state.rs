@@ -102,6 +102,14 @@ pub(crate) enum RuntimeControlError {
     AudioUnavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PackActionError {
+    NotFound,
+    ActivationFailed,
+    PersistenceFailed,
+}
+
 impl From<SettingsValidationError> for RuntimeControlError {
     fn from(error: SettingsValidationError) -> Self {
         match error {
