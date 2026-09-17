@@ -184,7 +184,7 @@ const APPROVED_DEPENDENCIES = [
     kind: null,
     optional: false,
     uses_default_features: true,
-    features: [],
+    features: ["tray-icon"],
     target: null,
     registry: null,
     path: null,

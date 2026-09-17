@@ -5,6 +5,7 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 use crate::runtime::{
     ImportOutcome, KeyForgeRuntime, PackActionError, RuntimeControlError, RuntimeSnapshot,
 };
+use crate::tray::TrayState;
 
 pub(crate) fn get_runtime_status_from(runtime: &KeyForgeRuntime) -> RuntimeSnapshot {
     runtime.snapshot()
@@ -49,9 +50,12 @@ pub fn get_runtime_status(runtime: tauri::State<'_, KeyForgeRuntime>) -> Runtime
 #[tauri::command]
 pub fn set_sound_enabled(
     runtime: tauri::State<'_, KeyForgeRuntime>,
+    tray: tauri::State<'_, TrayState>,
     enabled: bool,
 ) -> Result<RuntimeSnapshot, RuntimeControlError> {
-    set_sound_enabled_on(runtime.inner(), enabled)
+    let snapshot = set_sound_enabled_on(runtime.inner(), enabled)?;
+    tray.set_enabled(snapshot.sound_enabled);
+    Ok(snapshot)
 }
 
 #[tauri::command]

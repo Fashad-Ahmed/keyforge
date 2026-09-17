@@ -5,8 +5,9 @@ pub mod pack;
 mod runtime;
 #[allow(dead_code)]
 mod settings;
+mod tray;
 
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 
 #[cfg(test)]
 mod test_alloc;
@@ -22,7 +23,25 @@ pub fn run() {
                 .map(runtime::KeyForgeRuntime::start)
                 .unwrap_or_else(|_| runtime::KeyForgeRuntime::new_unavailable());
             app.manage(runtime);
+            app.manage(runtime::lifecycle::Lifecycle::default());
+            app.manage(tray::TrayState::default());
+            if tray::install(app.handle()).is_err() {
+                app.state::<runtime::lifecycle::Lifecycle>()
+                    .set_tray_available(false);
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let lifecycle = window.state::<runtime::lifecycle::Lifecycle>();
+                if lifecycle.on_close_requested() == runtime::lifecycle::CloseDecision::Hide {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info::get_app_info,

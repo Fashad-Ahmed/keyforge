@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 pub(crate) mod catalog;
+pub(crate) mod lifecycle;
 #[allow(dead_code)]
 pub(crate) mod selector;
 #[allow(dead_code)]
