@@ -178,7 +178,7 @@ it("renders the approved private precision hierarchy and local library", async (
   render(<AppShell />);
 
   expect(await screen.findByText("INPUT ENGINE READY")).toBeInTheDocument();
-  expect(screen.getByText("Mechanical Precision")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Mechanical Precision" })).toBeInTheDocument();
   expect(screen.getByText("On-device processing only.")).toBeInTheDocument();
   expect(screen.getByText("Quiet Linear")).toBeInTheDocument();
 });
@@ -197,7 +197,7 @@ it("reconciles selected pack from the authoritative native snapshot", async () =
   fireEvent.click(await screen.findByRole("button", { name: "Select Quiet Linear" }));
 
   expect(selectSoundPackMock).toHaveBeenCalledWith("quiet-linear");
-  expect(await screen.findByText("Quiet Linear Precision")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Quiet Linear Precision" })).toBeInTheDocument();
 });
 
 it("shows a sanitized pack error without leaking native details", async () => {

@@ -76,3 +76,18 @@ it("documents product settings, import, activation, and tray boundaries", () => 
     expect(documents).toContain(phrase);
   }
 });
+
+it("uses a focused portrait product window", () => {
+  const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")) as {
+    app: { windows: Array<Record<string, unknown>> };
+  };
+
+  expect(config.app.windows).toEqual([
+    expect.objectContaining({
+      height: 900,
+      minHeight: 720,
+      minWidth: 600,
+      width: 760,
+    }),
+  ]);
+});

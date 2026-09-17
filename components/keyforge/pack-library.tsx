@@ -6,7 +6,7 @@ export function PackLibrary({ packs, pendingAction, onImport, onSelect }: PackLi
   return (
     <section className="library-panel" aria-labelledby="library-title">
       <div className="section-heading">
-        <div><p className="eyebrow">Local library</p><h2 id="library-title">Sound profiles</h2></div>
+        <div><p className="eyebrow">Local library</p><h2 id="library-title">Installed instruments</h2></div>
         <button className="import-button" disabled={pendingAction !== null} onClick={onImport} type="button">Import local pack</button>
       </div>
       <div className="pack-list">

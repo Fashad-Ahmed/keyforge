@@ -138,7 +138,7 @@ export function AppShell() {
             <p>{soundRuntime.state === "unavailable" ? "Sound runtime unavailable" : "Connecting to local engine..."}</p>
           </div>
         )}
-        <footer className="instrument-footer"><span>LOCAL PROCESSING</span><span>NO TELEMETRY</span><span>KEYFORGE 01</span></footer>
+        <footer className="instrument-footer"><span>Private by design</span><span>Local processing · No telemetry</span></footer>
       </div>
     </main>
   );
