@@ -303,11 +303,15 @@ impl KeyForgeRuntime {
         Ok(PackCatalog::new(summaries, &active_id))
     }
 
-    pub(crate) fn set_enabled(&self, enabled: bool) -> RuntimeSnapshot {
+    pub(crate) fn set_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<RuntimeSnapshot, RuntimeControlError> {
         let mut inner = self.inner.lock().expect("runtime state mutex poisoned");
         inner.sound_enabled = enabled;
         drop(inner);
-        self.snapshot()
+        self.persist_current_settings()?;
+        Ok(self.snapshot())
     }
 
     pub(crate) fn set_volume(&self, volume: f32) -> Result<RuntimeSnapshot, RuntimeControlError> {
@@ -325,7 +329,21 @@ impl KeyForgeRuntime {
         let mut inner = self.inner.lock().expect("runtime state mutex poisoned");
         inner.volume = volume;
         drop(inner);
+        self.persist_current_settings()?;
         Ok(self.snapshot())
+    }
+
+    fn persist_current_settings(&self) -> Result<(), RuntimeControlError> {
+        let Some(store) = &self.settings_store else {
+            return Ok(());
+        };
+        let inner = self.inner.lock().expect("runtime state mutex poisoned");
+        let settings = AppSettings::new(inner.sound_enabled, inner.volume.get(), &inner.pack_id)
+            .map_err(|_| RuntimeControlError::PersistenceFailed)?;
+        drop(inner);
+        store
+            .save(&settings)
+            .map_err(|_| RuntimeControlError::PersistenceFailed)
     }
 
     #[cfg(test)]
@@ -436,13 +454,32 @@ impl From<VolumeError> for RuntimeControlError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use super::*;
     use crate::{audio::SampleId, input::SoundEvent};
+
+    static SETTINGS_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn runtime_with_settings_store() -> (KeyForgeRuntime, PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "keyforge-runtime-settings-test-{}-{}",
+            std::process::id(),
+            SETTINGS_TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        let mut runtime = KeyForgeRuntime::new_for_test();
+        runtime.settings_store = Some(SettingsStore::open(path.clone()));
+        (runtime, path)
+    }
 
     #[test]
     fn disabled_runtime_ignores_sound_events() {
         let runtime = KeyForgeRuntime::new_with_test_samples([SampleId::from_raw_for_test(7)]);
-        runtime.set_enabled(false);
+        runtime.set_enabled(false).unwrap();
 
         runtime.handle_sound_event(SoundEvent::Normal);
 
@@ -480,5 +517,46 @@ mod tests {
             Err(PackActionError::NotFound)
         );
         assert_eq!(runtime.snapshot().pack_id, before.pack_id);
+    }
+
+    #[test]
+    fn persists_enabled_state() {
+        let (runtime, path) = runtime_with_settings_store();
+
+        runtime.set_enabled(false).unwrap();
+
+        assert!(!SettingsStore::open(path.clone())
+            .load()
+            .settings()
+            .sound_enabled());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn persists_volume_and_rejects_invalid_values_before_writing() {
+        let (runtime, path) = runtime_with_settings_store();
+        runtime.set_volume(0.25).unwrap();
+        assert_eq!(
+            SettingsStore::open(path.clone())
+                .load()
+                .settings()
+                .master_volume()
+                .get(),
+            0.25
+        );
+
+        assert_eq!(
+            runtime.set_volume(f32::NAN),
+            Err(RuntimeControlError::InvalidVolume)
+        );
+        assert_eq!(
+            SettingsStore::open(path.clone())
+                .load()
+                .settings()
+                .master_volume()
+                .get(),
+            0.25
+        );
+        fs::remove_dir_all(path).unwrap();
     }
 }

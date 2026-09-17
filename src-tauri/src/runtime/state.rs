@@ -100,6 +100,7 @@ impl RuntimeSnapshot {
 pub(crate) enum RuntimeControlError {
     InvalidVolume,
     AudioUnavailable,
+    PersistenceFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

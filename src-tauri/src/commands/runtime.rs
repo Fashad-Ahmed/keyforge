@@ -4,7 +4,10 @@ pub(crate) fn get_runtime_status_from(runtime: &KeyForgeRuntime) -> RuntimeSnaps
     runtime.snapshot()
 }
 
-pub(crate) fn set_sound_enabled_on(runtime: &KeyForgeRuntime, enabled: bool) -> RuntimeSnapshot {
+pub(crate) fn set_sound_enabled_on(
+    runtime: &KeyForgeRuntime,
+    enabled: bool,
+) -> Result<RuntimeSnapshot, RuntimeControlError> {
     runtime.set_enabled(enabled)
 }
 
@@ -24,7 +27,7 @@ pub fn get_runtime_status(runtime: tauri::State<'_, KeyForgeRuntime>) -> Runtime
 pub fn set_sound_enabled(
     runtime: tauri::State<'_, KeyForgeRuntime>,
     enabled: bool,
-) -> RuntimeSnapshot {
+) -> Result<RuntimeSnapshot, RuntimeControlError> {
     set_sound_enabled_on(runtime.inner(), enabled)
 }
 
@@ -44,7 +47,7 @@ mod tests {
     fn commands_return_sanitized_status_and_apply_controls() {
         let runtime = KeyForgeRuntime::new_for_test();
         assert!(get_runtime_status_from(&runtime).sound_enabled);
-        assert!(!set_sound_enabled_on(&runtime, false).sound_enabled);
+        assert!(!set_sound_enabled_on(&runtime, false).unwrap().sound_enabled);
         assert_eq!(set_master_volume_on(&runtime, 0.25).unwrap().volume, 0.25);
     }
 }
