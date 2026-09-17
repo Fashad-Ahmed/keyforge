@@ -118,10 +118,11 @@ export function AppShell() {
               </div>
               <PlaybackControls
                 enabled={soundStatus.soundEnabled}
+                enabledPending={pendingAction === "enabled"}
                 onEnabledChange={(enabled) => void updateEnabled(enabled)}
                 onVolumeChange={(volume) => void updateVolume(volume)}
-                pending={pendingAction === "enabled" || pendingAction === "volume"}
                 volume={soundStatus.volume}
+                volumePending={pendingAction === "volume"}
               />
             </div>
             <OperationMessage message={message} />

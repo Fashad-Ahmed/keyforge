@@ -209,3 +209,24 @@ it("shows a sanitized pack error without leaking native details", async () => {
   expect(await screen.findByText("The pack could not be activated. Your current sound is still active.")).toBeInTheDocument();
   expect(screen.queryByText(/secret\.zip/u)).not.toBeInTheDocument();
 });
+
+it("keeps unrelated controls available while one native mutation is pending", async () => {
+  let resolveEnabled: ((value: Awaited<ReturnType<typeof setSoundEnabledMock>>) => void) | undefined;
+  setSoundEnabledMock.mockReturnValue(new Promise((resolve) => { resolveEnabled = resolve; }));
+  render(<AppShell />);
+
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Sound playback" }));
+
+  expect(screen.getByRole("checkbox", { name: "Sound playback" })).toBeDisabled();
+  expect(screen.getByRole("slider", { name: "Volume" })).toBeEnabled();
+  resolveEnabled?.({
+    audioStatus: "ready",
+    groupCounts: { normal: 3, space: 1, enter: 1, backspace: 1, modifier: 1 },
+    inputStatus: "ready",
+    packId: "keyforge-mechanical",
+    packName: "KeyForge Mechanical",
+    packs: [],
+    soundEnabled: false,
+    volume: 1,
+  });
+});
