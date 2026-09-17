@@ -623,48 +623,27 @@ mod tests {
     }
 
     #[test]
-    fn manager_adds_no_tauri_frontend_or_startup_boundary() {
+    fn manager_is_reached_only_through_the_native_runtime_boundary() {
         let source = include_str!("../lib.rs");
+        let command_source = include_str!("../commands/runtime.rs");
 
-        assert!(source_has_unchanged_run_boundary(source));
+        assert!(source.contains("runtime::KeyForgeRuntime::start"));
+        assert!(source.contains("app.manage(runtime)"));
         assert!(!source.contains("PackManager::open"));
         assert!(!source.contains("install_zip"));
         assert!(!source.contains("register_samples"));
+        assert!(!command_source.contains("PackManager"));
+        assert!(!command_source.contains("AudioEngine"));
     }
 
     #[test]
-    fn run_boundary_source_check_accepts_windows_line_endings() {
-        let source = concat!(
-            "pub fn run() {\r\n",
-            "    tauri::Builder::default()\r\n",
-            "        .",
-            "invoke_",
-            "handler",
-            "(tauri::",
-            "generate_",
-            "handler!",
-            "[commands::app_info::get_app_info])\r\n",
-            "        .run(tauri::generate_context!())\r\n",
-            "        .expect(\"error while running tauri application\");\r\n",
-            "}\r\n",
-        );
+    fn runtime_commands_do_not_expose_pack_or_audio_objects() {
+        let command_source = include_str!("../commands/runtime.rs");
 
-        assert!(source_has_unchanged_run_boundary(source));
-    }
-
-    fn source_has_unchanged_run_boundary(source: &str) -> bool {
-        let handler_macro = concat!("generate_", "handler!");
-        let invoke_handler = concat!("invoke_", "handler");
-        let unchanged_run = format!(
-            r#"pub fn run() {{
-    tauri::Builder::default()
-        .{invoke_handler}(tauri::{handler_macro}[commands::app_info::get_app_info])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}}"#
-        );
-
-        source.replace("\r\n", "\n").contains(&unchanged_run)
+        assert!(command_source.contains("RuntimeSnapshot"));
+        assert!(!command_source.contains("PackManager"));
+        assert!(!command_source.contains("AudioEngine"));
+        assert!(!command_source.contains("SampleId"));
     }
 
     fn fill_registry_leaving_one_float(handle: &AudioEngineHandle) {

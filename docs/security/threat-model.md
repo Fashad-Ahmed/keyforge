@@ -24,6 +24,7 @@
 ## Implemented Mitigations
 
 - raw keyboard events remain in Rust
+- macOS raw key codes remain inside the native adapter and are reduced to internal sound categories
 - frontend receives no raw key data
 - V1 has no application networking
 - packs are data-only: strict declarative JSON plus validated WAV audio

@@ -2,13 +2,13 @@
 
 ## Boundary 1: Operating System → Rust Input Adapter
 
-Future OS-specific adapters receive native keyboard events.
+OS-specific adapters receive native keyboard events. In Milestone 4, macOS is implemented first; Windows and Linux return unsupported status.
 
 ## Boundary 2: Rust Input Adapter → Event Sanitizer
 
 Raw events may exist only transiently inside the native input subsystem.
 
-The sanitizer converts raw events into an internal `SoundEvent`. It must not produce typed strings or retain text.
+The sanitizer converts raw events into an internal `SoundEvent`. It must not produce typed strings, retain text, or expose key codes outside the adapter.
 
 ## Boundary 3: Rust Core → Next.js
 

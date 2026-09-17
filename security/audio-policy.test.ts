@@ -100,7 +100,8 @@ const REVIEWED_WORKFLOW_LINES = [
 ];
 
 const PROJECT_ROOT = process.cwd();
-const ALLOWED_HANDLER = "tauri::generate_handler![commands::app_info::get_app_info]";
+const ALLOWED_HANDLER =
+  "tauri::generate_handler![commands::app_info::get_app_info,commands::runtime::get_runtime_status,commands::runtime::set_sound_enabled,commands::runtime::set_master_volume]";
 const ALLOWED_ACTIONS = [
   "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
   "pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa",
@@ -823,7 +824,7 @@ function nativeIpcFixture(): Map<string, string> {
   return new Map([
     [
       "src-tauri/src/lib.rs",
-      "tauri::Builder::default().invoke_handler(tauri::generate_handler![commands::app_info::get_app_info]);",
+      "tauri::Builder::default().invoke_handler(tauri::generate_handler![commands::app_info::get_app_info,commands::runtime::get_runtime_status,commands::runtime::set_sound_enabled,commands::runtime::set_master_volume]);",
     ],
   ]);
 }
@@ -1120,12 +1121,13 @@ it("rejects quoted escaped job permissions that the former reader ignored", () =
   expect(() => assertWorkflowPolicy(workflow)).toThrow();
 });
 
-it("documents M3 startup and later ownership exclusions", () => {
+it("documents M4 startup and later ownership exclusions", () => {
   const readme = read("README.md");
   expect(readme).toContain(
-    "`AudioEngine` and `PackManager` are not constructed during ordinary Tauri startup.",
+    "The audio engine and pack manager are constructed by Rust during ordinary Tauri startup.",
   );
+  expect(readme).toContain("raw key codes never cross the adapter boundary");
   expect(readme).toContain("There is no sound-pack IPC and no application networking.");
-  expect(readme).toContain("Milestone 4 owns sanitized input integration.");
-  expect(readme).toContain("Milestone 6 owns product UI and persistent volume.");
+  expect(readme).toContain("Milestone 5 owns Windows/Linux input adapters.");
+  expect(readme).toContain("Milestone 6 owns persistent volume and expanded product UI.");
 });
