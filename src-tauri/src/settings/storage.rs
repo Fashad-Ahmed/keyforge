@@ -1,4 +1,6 @@
-use std::{fs, path::Path};
+#[cfg(not(windows))]
+use std::fs;
+use std::path::Path;
 
 #[cfg(not(windows))]
 pub(super) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
