@@ -43,6 +43,16 @@ const FORBIDDEN_STARTUP_SYMBOLS = [
   "register_sample",
   "register_samples",
 ] as const;
+const APPROVED_RUNTIME_SOURCES = new Set([
+  "src-tauri/src/runtime/mod.rs",
+  "src-tauri/src/runtime/selector.rs",
+]);
+const EXPECTED_HANDLER_ALLOWLIST = [
+  "commands::app_info::get_app_info",
+  "commands::runtime::get_runtime_status",
+  "commands::runtime::set_sound_enabled",
+  "commands::runtime::set_master_volume",
+].join(",");
 
 function auditProductionSources(sources: ReadonlyMap<string, string>): string[] {
   const violations: string[] = [];
@@ -57,13 +67,21 @@ function auditProductionSources(sources: ReadonlyMap<string, string>): string[] 
 
     const auditedSource = withoutApprovedFoundationDeclarations(path, source);
 
-    for (const root of ["audio", "pack"] as const) {
-      if (hasRawIdentifier(auditedSource, root)) {
-        violations.push(`${path}: ${root} module reference`);
+    if (!APPROVED_RUNTIME_SOURCES.has(path)) {
+      for (const root of ["audio", "pack"] as const) {
+        if (hasRawIdentifier(auditedSource, root)) {
+          violations.push(`${path}: ${root} module reference`);
+        }
+      }
+
+      for (const symbol of FORBIDDEN_STARTUP_SYMBOLS) {
+        if (hasRawIdentifier(auditedSource, symbol)) {
+          violations.push(`${path}: ${symbol}`);
+        }
       }
     }
 
-    if (hasRawIdentifier(auditedSource, "path")) {
+    if (/\bpath(?:\s|\/\*[\s\S]*?\*\/)*=/u.test(auditedSource)) {
       violations.push(`${path}: module path override`);
     }
     if (hasRawIdentifier(auditedSource, "include")) {
@@ -71,12 +89,6 @@ function auditProductionSources(sources: ReadonlyMap<string, string>): string[] 
     }
     if (hasRawIdentifier(auditedSource, "macro_use")) {
       violations.push(`${path}: macro_use`);
-    }
-
-    for (const symbol of FORBIDDEN_STARTUP_SYMBOLS) {
-      if (hasRawIdentifier(auditedSource, symbol)) {
-        violations.push(`${path}: ${symbol}`);
-      }
     }
   }
 
@@ -219,7 +231,7 @@ function nativeBoundaryViolations(capability: string, libSource: string): string
   const handlers = [...libSource.matchAll(/generate_handler!\s*\[([^\]]*)\]/gu)];
   if (
     handlers.length !== 1 ||
-    handlers[0]?.[1]?.trim() !== "commands::app_info::get_app_info"
+    handlers[0]?.[1]?.replace(/\s+/gu, "") !== EXPECTED_HANDLER_ALLOWLIST
   ) {
     violations.push("handler allowlist changed");
   }
@@ -612,8 +624,8 @@ it("keeps capabilities empty and the handler allowlist exact", () => {
     nativeBoundaryViolations(
       capability,
       libSource.replace(
-        "commands::app_info::get_app_info]",
-        "commands::app_info::get_app_info, commands::packs::install]",
+        "commands::runtime::set_master_volume",
+        "commands::runtime::set_master_volume, commands::packs::install",
       ),
     ),
   ).toContain("handler allowlist changed");

@@ -26,7 +26,7 @@ impl SoundSelector {
     }
 
     #[cfg(test)]
-    fn from_groups_for_test(
+    pub(crate) fn from_groups_for_test(
         normal: impl IntoIterator<Item = SampleId>,
         space: impl IntoIterator<Item = SampleId>,
         enter: impl IntoIterator<Item = SampleId>,

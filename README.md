@@ -2,25 +2,26 @@
 
 KeyForge is a free, open-source, privacy-first keyboard sound engine for macOS, Windows, and Linux.
 
-This repository currently contains Milestone 3: a secure Tauri 2 desktop foundation, a statically exported Next.js presentation layer, a native Rust audio engine, and a native sound-pack importer. Keyboard capture, production UI controls, autostart, updates, community features, and application networking are intentionally not implemented yet.
+This repository currently contains Milestone 4: a secure Tauri 2 desktop foundation, a statically exported Next.js presentation layer, a native Rust audio engine, a native sound-pack importer, and first local key-sound playback on macOS. Autostart, updates, custom pack import UI, community features, and application networking are intentionally not implemented yet.
 
 ## Architecture
 
 - Next.js and TypeScript render the interface as static files in `out/`.
 - Tauri loads those files directly; there is no production Next.js server.
 - Native functionality belongs in Rust and crosses IPC only through explicitly registered commands.
-- The only custom command is `get_app_info`.
+- Custom commands are limited to reviewed coarse status and control IPC: `get_app_info`, `get_runtime_status`, `set_sound_enabled`, and `set_master_volume`.
 - The main window has no built-in Tauri core permissions.
 - The audio engine accepts validated, decoded PCM only; encoded audio bytes and file paths are outside its boundary.
 - Its fixed mixer supports 32 simultaneous voices, and master volume is validated and held only in memory.
-- The audio engine and pack manager have no production IPC or UI integration in Milestone 3.
-- `AudioEngine` and `PackManager` are not constructed during ordinary Tauri startup.
+- The audio engine and pack manager are constructed by Rust during ordinary Tauri startup.
+- The macOS input adapter converts native key-down events into internal `SoundEvent` categories only; raw key codes never cross the adapter boundary.
+- Windows and Linux input adapters return unsupported status in this milestone.
 - Sound packs contain data only: one strict JSON manifest and signed-16 PCM WAV files for normal, Space, Enter, Backspace, and Modifier groups.
 - Imports enforce a 16 MiB compressed archive limit, reject cross-platform traversal, decode before same-parent staging, and reject duplicate pack IDs without replacement.
 - Installed audio is rewritten as canonical signed-16 PCM WAV; the audio registry receives decoded PCM only.
 - There is no sound-pack IPC and no application networking.
-- Milestone 4 owns sanitized input integration.
-- Milestone 6 owns product UI and persistent volume.
+- Milestone 5 owns Windows/Linux input adapters.
+- Milestone 6 owns persistent volume and expanded product UI.
 - The application contains no telemetry, analytics, accounts, or runtime networking.
 
 See [the trust-boundary documentation](docs/architecture/trust-boundaries.md) and [threat model](docs/security/threat-model.md) before adding native functionality.
@@ -42,6 +43,8 @@ pnpm tauri dev
 ```
 
 The development asset server is restricted to `127.0.0.1`. Next.js telemetry is disabled by the committed project environment.
+
+On macOS, local key-sound playback uses the operating system input monitoring/accessibility prompt. KeyForge does not store, transmit, log, or send raw key data to the frontend; the native adapter keeps raw key codes inside Rust and forwards only coarse sound categories internally.
 
 To manually smoke-test the native audio engine during development, run:
 
