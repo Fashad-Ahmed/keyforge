@@ -14,6 +14,7 @@ mod test_alloc;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let runtime = app
                 .path()
@@ -27,7 +28,9 @@ pub fn run() {
             commands::app_info::get_app_info,
             commands::runtime::get_runtime_status,
             commands::runtime::set_sound_enabled,
-            commands::runtime::set_master_volume
+            commands::runtime::set_master_volume,
+            commands::runtime::import_sound_pack,
+            commands::runtime::select_sound_pack
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

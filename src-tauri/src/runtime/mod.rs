@@ -21,7 +21,7 @@ use crate::{
 };
 use catalog::{PackCatalog, PackSummary};
 use selector::SoundSelector;
-pub(crate) use state::{PackActionError, RuntimeControlError, RuntimeSnapshot};
+pub(crate) use state::{ImportOutcome, PackActionError, RuntimeControlError, RuntimeSnapshot};
 use state::{RuntimeAudioStatus, RuntimeGroupCounts, RuntimeInputStatus};
 
 struct RuntimeInner {
@@ -265,6 +265,21 @@ impl KeyForgeRuntime {
                 .map_err(|_| PackActionError::PersistenceFailed)?;
         }
         Ok(self.snapshot())
+    }
+
+    pub(crate) fn install_pack(
+        &self,
+        source: &std::path::Path,
+    ) -> Result<RuntimeSnapshot, PackActionError> {
+        let manager = self
+            .pack_manager
+            .as_ref()
+            .ok_or(PackActionError::ActivationFailed)?;
+        let installed = manager.install_zip(source).map_err(|error| match error {
+            PackInstallError::DuplicateId => PackActionError::DuplicatePack,
+            _ => PackActionError::InvalidPack,
+        })?;
+        self.select_pack(installed.id().as_str())
     }
 
     #[allow(dead_code)]

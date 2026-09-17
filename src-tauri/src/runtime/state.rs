@@ -109,6 +109,15 @@ pub(crate) enum PackActionError {
     NotFound,
     ActivationFailed,
     PersistenceFailed,
+    DuplicatePack,
+    InvalidPack,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "status", content = "snapshot", rename_all = "snake_case")]
+pub(crate) enum ImportOutcome {
+    Cancelled,
+    Installed(RuntimeSnapshot),
 }
 
 impl From<SettingsValidationError> for RuntimeControlError {
