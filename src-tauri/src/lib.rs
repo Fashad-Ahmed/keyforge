@@ -3,6 +3,8 @@ mod commands;
 pub mod input;
 pub mod pack;
 mod runtime;
+#[allow(dead_code)]
+mod settings;
 
 use tauri::Manager;
 

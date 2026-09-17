@@ -10,6 +10,7 @@ use std::{
 
 #[cfg(test)]
 use crate::audio::SampleId;
+use crate::settings::ValidatedVolume;
 use crate::{
     audio::{AudioEngine, AudioEngineHandle, AudioEngineStatus, VolumeError},
     input::{self, InputListener, InputStatus, SoundEvent},
@@ -17,7 +18,7 @@ use crate::{
 };
 use selector::SoundSelector;
 use state::{RuntimeAudioStatus, RuntimeGroupCounts, RuntimeInputStatus};
-pub(crate) use state::{RuntimeControlError, RuntimeSnapshot, ValidatedVolume};
+pub(crate) use state::{RuntimeControlError, RuntimeSnapshot};
 
 struct RuntimeInner {
     sound_enabled: bool,
@@ -197,7 +198,7 @@ impl KeyForgeRuntime {
     }
 
     pub(crate) fn set_volume(&self, volume: f32) -> Result<RuntimeSnapshot, RuntimeControlError> {
-        let volume = ValidatedVolume::new(volume)?;
+        let volume = ValidatedVolume::new(volume).map_err(RuntimeControlError::from)?;
         if let Some(handle) = &self.audio_handle {
             handle
                 .set_master_volume(volume.get())

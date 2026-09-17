@@ -1,3 +1,5 @@
+use crate::settings::{SettingsValidationError, ValidatedVolume};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RuntimeAudioStatus {
@@ -93,28 +95,21 @@ impl RuntimeSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ValidatedVolume(f32);
-
-impl ValidatedVolume {
-    pub(crate) fn new(volume: f32) -> Result<Self, RuntimeControlError> {
-        if volume.is_finite() && (0.0..=1.0).contains(&volume) {
-            Ok(Self(volume))
-        } else {
-            Err(RuntimeControlError::InvalidVolume)
-        }
-    }
-
-    pub(crate) fn get(self) -> f32 {
-        self.0
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RuntimeControlError {
     InvalidVolume,
     AudioUnavailable,
+}
+
+impl From<SettingsValidationError> for RuntimeControlError {
+    fn from(error: SettingsValidationError) -> Self {
+        match error {
+            SettingsValidationError::InvalidVolume | SettingsValidationError::InvalidPackId => {
+                Self::InvalidVolume
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -148,15 +143,15 @@ mod tests {
     #[test]
     fn rejects_invalid_volume() {
         assert_eq!(
-            ValidatedVolume::new(-0.1),
+            ValidatedVolume::new(-0.1).map_err(RuntimeControlError::from),
             Err(RuntimeControlError::InvalidVolume)
         );
         assert_eq!(
-            ValidatedVolume::new(1.1),
+            ValidatedVolume::new(1.1).map_err(RuntimeControlError::from),
             Err(RuntimeControlError::InvalidVolume)
         );
         assert_eq!(
-            ValidatedVolume::new(f32::NAN),
+            ValidatedVolume::new(f32::NAN).map_err(RuntimeControlError::from),
             Err(RuntimeControlError::InvalidVolume)
         );
         assert!(ValidatedVolume::new(0.5).is_ok());
