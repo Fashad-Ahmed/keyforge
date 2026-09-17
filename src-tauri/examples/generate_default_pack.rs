@@ -13,23 +13,60 @@ use zip::{write::SimpleFileOptions, CompressionMethod, System, ZipWriter};
 const SAMPLE_RATE: u32 = 48_000;
 const Q15_ONE: i64 = 32_767;
 const PEAK_LIMIT: i64 = 28_800;
-const MANIFEST: &[u8] = br#"{
-  "schema_version": 1,
-  "id": "keyforge-mechanical",
-  "name": "KeyForge Mechanical",
-  "pack_version": "1.1.0",
-  "sounds": {
-    "normal": [
-      "sounds/normal-01.wav",
-      "sounds/normal-02.wav",
-      "sounds/normal-03.wav"
-    ],
-    "space": ["sounds/space-01.wav"],
-    "enter": ["sounds/enter-01.wav"],
-    "backspace": ["sounds/backspace-01.wav"],
-    "modifier": ["sounds/modifier-01.wav"]
-  }
-}"#;
+#[derive(Clone, Copy)]
+struct Profile {
+    id: &'static str,
+    name: &'static str,
+    version: &'static str,
+    seed_mask: u32,
+    contact_gain: i64,
+    body_gain: i64,
+    shell_gain: i64,
+    body_smoothing: i64,
+}
+
+const PROFILES: [Profile; 4] = [
+    Profile {
+        id: "keyforge-mechanical",
+        name: "Classic Mechanical",
+        version: "1.1.0",
+        seed_mask: 0,
+        contact_gain: Q15_ONE,
+        body_gain: Q15_ONE,
+        shell_gain: Q15_ONE,
+        body_smoothing: Q15_ONE,
+    },
+    Profile {
+        id: "keyforge-deep-thock",
+        name: "Deep Thock",
+        version: "1.0.0",
+        seed_mask: 0xa391_6f2d,
+        contact_gain: 20_500,
+        body_gain: 32_767,
+        shell_gain: 21_500,
+        body_smoothing: 32_767,
+    },
+    Profile {
+        id: "keyforge-crisp-click",
+        name: "Crisp Click",
+        version: "1.0.0",
+        seed_mask: 0x4c17_b8e3,
+        contact_gain: 32_767,
+        body_gain: 17_800,
+        shell_gain: 29_500,
+        body_smoothing: 18_500,
+    },
+    Profile {
+        id: "keyforge-soft-linear",
+        name: "Soft Linear",
+        version: "1.0.0",
+        seed_mask: 0xd248_31ac,
+        contact_gain: 13_800,
+        body_gain: 18_500,
+        shell_gain: 11_500,
+        body_smoothing: 27_000,
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GeneratorError {
@@ -143,10 +180,35 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<PathBuf, GeneratorError> {
-    let output = parse_output_argument(arguments)?;
-    let archive = generate_archive()?;
+    let (profile, output) = parse_arguments(arguments)?;
+    let archive = generate_archive(profile)?;
     write_archive(&output, &archive)?;
     Ok(output)
+}
+
+fn parse_arguments(
+    arguments: impl IntoIterator<Item = OsString>,
+) -> Result<(Profile, PathBuf), GeneratorError> {
+    let mut arguments = arguments.into_iter();
+    let _program = arguments.next();
+    let profile_id = arguments
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or(GeneratorError::Arguments)?;
+    let output = arguments.next().ok_or(GeneratorError::Arguments)?;
+    if arguments.next().is_some() {
+        return Err(GeneratorError::Arguments);
+    }
+    let profile = profile_from_id(&profile_id)?;
+    let output = parse_output_argument([OsString::from("generator"), output])?;
+    Ok((profile, output))
+}
+
+fn profile_from_id(id: &str) -> Result<Profile, GeneratorError> {
+    PROFILES
+        .into_iter()
+        .find(|profile| profile.id == id)
+        .ok_or(GeneratorError::Arguments)
 }
 
 fn parse_output_argument(
@@ -186,7 +248,7 @@ fn write_archive(destination: &Path, archive: &[u8]) -> Result<(), GeneratorErro
     output.sync_all().map_err(|_| GeneratorError::Write)
 }
 
-fn generate_archive() -> Result<Vec<u8>, GeneratorError> {
+fn generate_archive(profile: Profile) -> Result<Vec<u8>, GeneratorError> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Stored)
@@ -197,11 +259,11 @@ fn generate_archive() -> Result<Vec<u8>, GeneratorError> {
         .start_file("manifest.json", options)
         .map_err(|_| GeneratorError::Generate)?;
     writer
-        .write_all(MANIFEST)
+        .write_all(&manifest(profile))
         .map_err(|_| GeneratorError::Generate)?;
 
     for voice in VOICES {
-        let samples = mechanical_sample(voice);
+        let samples = mechanical_sample(voice, profile);
         let wav = encode_wav(&samples)?;
         writer
             .start_file(voice.path, options)
@@ -215,6 +277,14 @@ fn generate_archive() -> Result<Vec<u8>, GeneratorError> {
         .finish()
         .map(|cursor| cursor.into_inner())
         .map_err(|_| GeneratorError::Generate)
+}
+
+fn manifest(profile: Profile) -> Vec<u8> {
+    format!(
+        "{{\n  \"schema_version\": 1,\n  \"id\": \"{}\",\n  \"name\": \"{}\",\n  \"pack_version\": \"{}\",\n  \"sounds\": {{\n    \"normal\": [\n      \"sounds/normal-01.wav\",\n      \"sounds/normal-02.wav\",\n      \"sounds/normal-03.wav\"\n    ],\n    \"space\": [\"sounds/space-01.wav\"],\n    \"enter\": [\"sounds/enter-01.wav\"],\n    \"backspace\": [\"sounds/backspace-01.wav\"],\n    \"modifier\": [\"sounds/modifier-01.wav\"]\n  }}\n}}",
+        profile.id, profile.name, profile.version
+    )
+    .into_bytes()
 }
 
 fn encode_wav(samples: &[i16]) -> Result<Vec<u8>, GeneratorError> {
@@ -235,7 +305,7 @@ fn encode_wav(samples: &[i16]) -> Result<Vec<u8>, GeneratorError> {
     Ok(cursor.into_inner())
 }
 
-fn mechanical_sample(voice: Voice) -> Vec<i16> {
+fn mechanical_sample(voice: Voice, profile: Profile) -> Vec<i16> {
     let (contact_gain, body_gain, shell_gain, contact_frames, body_frames, release_frames) =
         match voice.kind {
             SoundKind::Normal => (19_200, 12_400, 6_800, 260, 1_900, 180),
@@ -244,12 +314,13 @@ fn mechanical_sample(voice: Voice) -> Vec<i16> {
             SoundKind::Backspace => (20_400, 10_800, 7_800, 220, 1_700, 170),
             SoundKind::Modifier => (18_600, 9_400, 6_400, 190, 1_350, 150),
         };
-    let mut state = voice.seed;
+    let mut state = voice.seed ^ profile.seed_mask;
     let mut previous_noise = 0;
     let mut fast_filter = 0;
     let mut slow_filter = 0;
     let mut body_filter = 0;
-    let body_smoothing = (SAMPLE_RATE / voice.body_hz).clamp(18, 72) as i64;
+    let base_smoothing = (SAMPLE_RATE / voice.body_hz).clamp(18, 72) as i64;
+    let body_smoothing = scale_q15(base_smoothing, profile.body_smoothing).clamp(10, 90);
     let mut samples = Vec::with_capacity(voice.frames);
 
     for index in 0..voice.frames {
@@ -282,9 +353,9 @@ fn mechanical_sample(voice: Voice) -> Vec<i16> {
         });
         previous_noise = noise;
 
-        let mixed = scale_q15(contact, contact_gain)
-            + scale_q15(bottom_out, body_gain)
-            + scale_q15(case_resonance, shell_gain)
+        let mixed = scale_q15(scale_q15(contact, contact_gain), profile.contact_gain)
+            + scale_q15(scale_q15(bottom_out, body_gain), profile.body_gain)
+            + scale_q15(scale_q15(case_resonance, shell_gain), profile.shell_gain)
             + stabilizer;
         let attack = attack_envelope(index, 4);
         let release = release_envelope(index, voice.frames, release_frames);
@@ -350,8 +421,8 @@ mod tests {
     use zip::{CompressionMethod, System, ZipArchive};
 
     use super::{
-        generate_archive, mechanical_sample, parse_output_argument, write_archive, GeneratorError,
-        VOICES,
+        generate_archive, mechanical_sample, parse_output_argument, profile_from_id, write_archive,
+        GeneratorError, PROFILES, VOICES,
     };
 
     const EXPECTED_ENTRIES: [&str; 8] = [
@@ -365,7 +436,30 @@ mod tests {
         "sounds/space-01.wav",
     ];
 
-    const COMMITTED_ARCHIVE: &[u8] = include_bytes!("../assets/packs/keyforge-mechanical.zip");
+    const COMMITTED_ARCHIVES: [&[u8]; 4] = [
+        include_bytes!("../assets/packs/keyforge-mechanical.zip"),
+        include_bytes!("../assets/packs/keyforge-deep-thock.zip"),
+        include_bytes!("../assets/packs/keyforge-crisp-click.zip"),
+        include_bytes!("../assets/packs/keyforge-soft-linear.zip"),
+    ];
+
+    #[test]
+    fn generator_defines_four_distinct_mechanical_profiles() {
+        assert_eq!(PROFILES.len(), 4);
+        let archives = PROFILES
+            .into_iter()
+            .map(|profile| generate_archive(profile).unwrap())
+            .collect::<Vec<_>>();
+
+        for profile in PROFILES {
+            assert_eq!(profile_from_id(profile.id).unwrap().id, profile.id);
+        }
+        for left in 0..archives.len() {
+            for right in left + 1..archives.len() {
+                assert_ne!(archives[left], archives[right]);
+            }
+        }
+    }
 
     #[test]
     fn synthesis_source_rejects_float_transcendental_math() {
@@ -390,7 +484,7 @@ mod tests {
     #[test]
     fn mechanical_samples_do_not_have_tonal_resonant_tails() {
         for voice in VOICES {
-            let samples = mechanical_sample(voice);
+            let samples = mechanical_sample(voice, PROFILES[0]);
             let lag = (super::SAMPLE_RATE / voice.body_hz) as usize;
             let start = 192.min(samples.len() / 4);
             let end = samples.len().saturating_sub(lag + 32);
@@ -420,14 +514,16 @@ mod tests {
     }
 
     #[test]
-    fn generated_archive_matches_the_committed_asset() {
-        assert_eq!(generate_archive().unwrap(), COMMITTED_ARCHIVE);
+    fn generated_archives_match_the_committed_assets() {
+        for (profile, committed) in PROFILES.into_iter().zip(COMMITTED_ARCHIVES) {
+            assert_eq!(generate_archive(profile).unwrap(), committed);
+        }
     }
 
     #[test]
     fn generation_is_byte_for_byte_reproducible_and_data_only() {
-        let first = generate_archive().unwrap();
-        let second = generate_archive().unwrap();
+        let first = generate_archive(PROFILES[0]).unwrap();
+        let second = generate_archive(PROFILES[0]).unwrap();
 
         assert_eq!(first, second);
         assert_eq!(
@@ -459,7 +555,7 @@ mod tests {
 
     #[test]
     fn generated_wavs_are_short_safe_fixed_format_pcm() {
-        let bytes = generate_archive().unwrap();
+        let bytes = generate_archive(PROFILES[0]).unwrap();
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
 
         for name in EXPECTED_ENTRIES.into_iter().skip(1) {
@@ -528,7 +624,7 @@ mod tests {
         ));
         std::fs::create_dir(&test_directory).unwrap();
         let destination = test_directory.join("default.zip");
-        let archive = generate_archive().unwrap();
+        let archive = generate_archive(PROFILES[0]).unwrap();
         write_archive(&destination, &archive).unwrap();
         assert_eq!(
             write_archive(&destination, &archive),
