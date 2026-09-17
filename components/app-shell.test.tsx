@@ -230,3 +230,31 @@ it("keeps unrelated controls available while one native mutation is pending", as
     volume: 1,
   });
 });
+
+it("moves the volume slider immediately while native persistence is pending", async () => {
+  setMasterVolumeMock.mockReturnValue(new Promise(() => {}));
+  render(<AppShell />);
+
+  const slider = await screen.findByRole("slider", { name: "Volume" });
+  fireEvent.change(slider, { target: { value: "37" } });
+
+  expect(slider).toHaveValue("37");
+  expect(setMasterVolumeMock).toHaveBeenCalledWith(0.37);
+});
+
+it("keeps the active instrument visible when catalog discovery is unavailable", async () => {
+  getRuntimeStatusMock.mockResolvedValue({
+    audioStatus: "ready",
+    groupCounts: { normal: 3, space: 1, enter: 1, backspace: 1, modifier: 1 },
+    inputStatus: "ready",
+    packId: "keyforge-mechanical",
+    packName: "KeyForge Mechanical",
+    packs: [],
+    soundEnabled: true,
+    volume: 0.78,
+  });
+  render(<AppShell />);
+
+  expect(await screen.findByRole("heading", { name: "KeyForge Mechanical" })).toBeInTheDocument();
+  expect(screen.getByText("Active")).toBeInTheDocument();
+});

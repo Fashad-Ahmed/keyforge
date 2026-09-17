@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 
 type PlaybackControlsProps = {
   enabled: boolean;
@@ -10,7 +10,9 @@ type PlaybackControlsProps = {
 };
 
 export function PlaybackControls({ enabled, enabledPending, volume, volumePending, onEnabledChange, onVolumeChange }: PlaybackControlsProps) {
-  const percentage = Math.round(volume * 100);
+  const [draftVolume, setDraftVolume] = useState(volume);
+  useEffect(() => setDraftVolume(volume), [volume]);
+  const percentage = Math.round(draftVolume * 100);
   return (
     <section className="controls-panel" aria-labelledby="controls-title">
       <div className="control-heading">
@@ -22,7 +24,11 @@ export function PlaybackControls({ enabled, enabledPending, volume, volumePendin
       </div>
       <div className="volume-control">
         <div className="volume-label"><label htmlFor="master-volume">Output</label><output htmlFor="master-volume">{percentage}</output></div>
-        <input aria-label="Volume" disabled={volumePending} id="master-volume" max="100" min="0" onChange={(event) => onVolumeChange(Number(event.currentTarget.value) / 100)} style={{ "--volume": `${percentage}%` } as CSSProperties} type="range" value={percentage} />
+        <input aria-label="Volume" disabled={volumePending} id="master-volume" max="100" min="0" onChange={(event) => {
+          const nextVolume = Number(event.currentTarget.value) / 100;
+          setDraftVolume(nextVolume);
+          onVolumeChange(nextVolume);
+        }} style={{ "--volume": `${percentage}%` } as CSSProperties} type="range" value={percentage} />
       </div>
     </section>
   );

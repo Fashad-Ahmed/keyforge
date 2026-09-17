@@ -48,6 +48,17 @@ export function AppShell() {
   }, []);
 
   const soundStatus = soundRuntime.state === "ready" ? soundRuntime.status : undefined;
+  const visiblePacks = soundStatus && soundStatus.packs.length > 0
+    ? soundStatus.packs
+    : soundStatus
+      ? [{
+          active: true,
+          bundled: soundStatus.packId === "keyforge-mechanical",
+          groupCounts: soundStatus.groupCounts,
+          id: soundStatus.packId,
+          name: soundStatus.packName,
+        }]
+      : [];
 
   async function updateEnabled(enabled: boolean) {
     setPendingAction("enabled");
@@ -129,7 +140,7 @@ export function AppShell() {
             <PackLibrary
               onImport={() => void importPack()}
               onSelect={(packId) => void selectPack(packId)}
-              packs={soundStatus.packs}
+              packs={visiblePacks}
               pendingAction={pendingAction}
             />
           </div>

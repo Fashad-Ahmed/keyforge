@@ -84,8 +84,8 @@ it("uses a focused portrait product window", () => {
 
   expect(config.app.windows).toEqual([
     expect.objectContaining({
-      height: 900,
-      minHeight: 720,
+      height: 800,
+      minHeight: 680,
       minWidth: 600,
       width: 760,
     }),
