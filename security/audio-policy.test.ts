@@ -1134,13 +1134,15 @@ it("rejects quoted escaped job permissions that the former reader ignored", () =
   expect(() => assertWorkflowPolicy(workflow)).toThrow();
 });
 
-it("documents M4 startup and later ownership exclusions", () => {
+it("documents current startup and product boundary exclusions", () => {
   const readme = read("README.md");
   expect(readme).toContain(
     "The audio engine and pack manager are constructed by Rust during ordinary Tauri startup.",
   );
   expect(readme).toContain("raw key codes never cross the adapter boundary");
-  expect(readme).toContain("There is no sound-pack IPC and no application networking.");
-  expect(readme).toContain("Milestone 5 owns Windows/Linux input adapters.");
-  expect(readme).toContain("Milestone 6 owns persistent volume and expanded product UI.");
+  expect(readme).toContain("Import uses a Rust-only native file picker.");
+  expect(readme).toContain("Sound enabled, master volume, and selected pack ID");
+  expect(readme).toContain(
+    "Autostart, networking, updates, and Windows/Linux input hooks remain excluded.",
+  );
 });

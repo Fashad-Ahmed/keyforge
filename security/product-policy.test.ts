@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { expect, it } from "vitest";
 
@@ -30,4 +32,47 @@ it("does not accept archive paths over product IPC", () => {
   );
 
   expect(command?.[1] ?? "").not.toMatch(/path|file|archive/iu);
+});
+
+function sourceFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    return entry.isDirectory()
+      ? sourceFiles(path)
+      : /\.(?:ts|tsx)$/u.test(entry.name)
+        ? [path]
+        : [];
+  });
+}
+
+it("keeps the static frontend free of network, persistence, and native path fields", () => {
+  const sources = [...sourceFiles("app"), ...sourceFiles("components"), ...sourceFiles("lib")]
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(sources).not.toMatch(/\b(?:fetch|WebSocket|EventSource)\s*\(/u);
+  expect(sources).not.toMatch(/\b(?:localStorage|sessionStorage|indexedDB|document\.cookie)\b/u);
+  expect(readFileSync("lib/types/runtime.ts", "utf8")).not.toMatch(
+    /\b(?:path|file|archive|sample|keyCode|rawEvent)\s*:/iu,
+  );
+});
+
+it("documents product settings, import, activation, and tray boundaries", () => {
+  const documents = [
+    "README.md",
+    "SECURITY.md",
+    "docs/architecture/trust-boundaries.md",
+    "docs/security/threat-model.md",
+  ].map((path) => readFileSync(path, "utf8").toLowerCase()).join("\n");
+
+  for (const phrase of [
+    "sound enabled, master volume, and selected pack id",
+    "rust-only native file picker",
+    "prepare-then-commit activation",
+    "close-to-tray",
+    "sanitized failures",
+    "autostart, networking, updates, and windows/linux input hooks remain excluded",
+  ]) {
+    expect(documents).toContain(phrase);
+  }
 });
