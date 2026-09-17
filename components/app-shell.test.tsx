@@ -6,11 +6,15 @@ import { AppShell } from "./app-shell";
 const {
   getAppInfoMock,
   getRuntimeStatusMock,
+  importSoundPackMock,
+  selectSoundPackMock,
   setMasterVolumeMock,
   setSoundEnabledMock,
 } = vi.hoisted(() => ({
   getAppInfoMock: vi.fn(),
   getRuntimeStatusMock: vi.fn(),
+  importSoundPackMock: vi.fn(),
+  selectSoundPackMock: vi.fn(),
   setMasterVolumeMock: vi.fn(),
   setSoundEnabledMock: vi.fn(),
 }));
@@ -18,6 +22,8 @@ const {
 vi.mock("@/lib/native/api", () => ({
   getAppInfo: getAppInfoMock,
   getRuntimeStatus: getRuntimeStatusMock,
+  importSoundPack: importSoundPackMock,
+  selectSoundPack: selectSoundPackMock,
   setMasterVolume: setMasterVolumeMock,
   setSoundEnabled: setSoundEnabledMock,
 }));
@@ -40,6 +46,22 @@ beforeEach(() => {
     inputStatus: "ready",
     packId: "keyforge-mechanical",
     packName: "KeyForge Mechanical",
+    packs: [
+      {
+        active: true,
+        bundled: true,
+        groupCounts: { normal: 3, space: 1, enter: 1, backspace: 1, modifier: 1 },
+        id: "keyforge-mechanical",
+        name: "KeyForge Mechanical",
+      },
+      {
+        active: false,
+        bundled: false,
+        groupCounts: { normal: 2, space: 1, enter: 1, backspace: 1, modifier: 1 },
+        id: "quiet-linear",
+        name: "Quiet Linear",
+      },
+    ],
     soundEnabled: true,
     volume: 1,
   });
@@ -56,6 +78,7 @@ beforeEach(() => {
       inputStatus: "ready",
       packId: "keyforge-mechanical",
       packName: "KeyForge Mechanical",
+      packs: [],
       soundEnabled: enabled,
       volume: 1,
     }),
@@ -73,10 +96,37 @@ beforeEach(() => {
       inputStatus: "ready",
       packId: "keyforge-mechanical",
       packName: "KeyForge Mechanical",
+      packs: [],
       soundEnabled: true,
       volume,
     }),
   );
+  importSoundPackMock.mockReset().mockResolvedValue({ status: "cancelled" });
+  selectSoundPackMock.mockReset().mockResolvedValue({
+    audioStatus: "ready",
+    groupCounts: { normal: 2, space: 1, enter: 1, backspace: 1, modifier: 1 },
+    inputStatus: "ready",
+    packId: "quiet-linear",
+    packName: "Quiet Linear",
+    packs: [
+      {
+        active: false,
+        bundled: true,
+        groupCounts: { normal: 3, space: 1, enter: 1, backspace: 1, modifier: 1 },
+        id: "keyforge-mechanical",
+        name: "KeyForge Mechanical",
+      },
+      {
+        active: true,
+        bundled: false,
+        groupCounts: { normal: 2, space: 1, enter: 1, backspace: 1, modifier: 1 },
+        id: "quiet-linear",
+        name: "Quiet Linear",
+      },
+    ],
+    soundEnabled: true,
+    volume: 1,
+  });
 });
 
 it("renders native runtime information", async () => {
@@ -122,4 +172,40 @@ it("updates master volume through the native runtime", async () => {
   fireEvent.change(slider, { target: { value: "25" } });
 
   expect(setMasterVolumeMock).toHaveBeenCalledWith(0.25);
+});
+
+it("renders the approved private precision hierarchy and local library", async () => {
+  render(<AppShell />);
+
+  expect(await screen.findByText("INPUT ENGINE READY")).toBeInTheDocument();
+  expect(screen.getByText("Mechanical Precision")).toBeInTheDocument();
+  expect(screen.getByText("On-device processing only.")).toBeInTheDocument();
+  expect(screen.getByText("Quiet Linear")).toBeInTheDocument();
+});
+
+it("opens native import without collecting a path", async () => {
+  render(<AppShell />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Import local pack" }));
+
+  expect(importSoundPackMock).toHaveBeenCalledWith();
+});
+
+it("reconciles selected pack from the authoritative native snapshot", async () => {
+  render(<AppShell />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Select Quiet Linear" }));
+
+  expect(selectSoundPackMock).toHaveBeenCalledWith("quiet-linear");
+  expect(await screen.findByText("Quiet Linear Precision")).toBeInTheDocument();
+});
+
+it("shows a sanitized pack error without leaking native details", async () => {
+  selectSoundPackMock.mockRejectedValue(new Error("/Users/private/secret.zip"));
+  render(<AppShell />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Select Quiet Linear" }));
+
+  expect(await screen.findByText("The pack could not be activated. Your current sound is still active.")).toBeInTheDocument();
+  expect(screen.queryByText(/secret\.zip/u)).not.toBeInTheDocument();
 });
