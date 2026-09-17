@@ -6,8 +6,10 @@ KeyForge contributors and dedicated to the public domain under CC0-1.0.
 The WAV files are synthesized offline by
 `src-tauri/examples/generate_default_pack.rs`. The deterministic generator
 uses fixed xorshift32 seeds, integer Q15 attack/decay/release envelopes, and
-integer phase-accumulator triangle oscillators to layer short noise bursts,
-damped click impulses, and low-amplitude resonant tails. It uses no
+integer high-pass, band-pass, and low-pass filters to layer a sharp stem
+contact, bottom-out thock, short case resonance, and stabilizer chatter. The
+sound is transient rather than pitched: the generator contains no tonal
+oscillator. It uses no
 floating-point or platform `libm` operation, produces mono signed 16-bit PCM at
 48,000 Hz, clamps every sample below 0.9 full scale, ends every WAV at exact
 zero, and performs no network access. It is a developer example only: neither
@@ -17,7 +19,7 @@ zero, and performs no network access. It is a developer example only: neither
 
 - Manifest ID: `keyforge-mechanical`
 - Display name: `KeyForge Mechanical`
-- Pack version: `1.0.0`
+- Pack version: `1.1.0`
 - `manifest.json`
 - `sounds/backspace-01.wav`
 - `sounds/enter-01.wav`
@@ -51,5 +53,5 @@ semantics, so it never replaces an existing file. Its successful stdout is
 only that relative path. The expected SHA-256 digest is:
 
 ```text
-a99b45805e10b5ce00ae01f8cca21e6e98b3a5ec3334365200550d822e6cfd2f
+617c8a2e9fa7fc77854bb28d086630dd493bdb46bd9cb9fd34aa3ce1b154493f
 ```

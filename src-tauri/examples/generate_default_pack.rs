@@ -17,7 +17,7 @@ const MANIFEST: &[u8] = br#"{
   "schema_version": 1,
   "id": "keyforge-mechanical",
   "name": "KeyForge Mechanical",
-  "pack_version": "1.0.0",
+  "pack_version": "1.1.0",
   "sounds": {
     "normal": [
       "sounds/normal-01.wav",
@@ -74,7 +74,7 @@ const VOICES: [Voice; 7] = [
     Voice {
         path: "sounds/backspace-01.wav",
         seed: 0x8a31_37d2,
-        frames: 1_056,
+        frames: 2_400,
         body_hz: 1_120,
         kind: SoundKind::Backspace,
         delayed_impulse: None,
@@ -82,15 +82,15 @@ const VOICES: [Voice; 7] = [
     Voice {
         path: "sounds/enter-01.wav",
         seed: 0xe713_40c5,
-        frames: 1_920,
+        frames: 4_200,
         body_hz: 690,
         kind: SoundKind::Enter,
-        delayed_impulse: Some(672),
+        delayed_impulse: Some(720),
     },
     Voice {
         path: "sounds/modifier-01.wav",
         seed: 0x4d02_b981,
-        frames: 864,
+        frames: 1_920,
         body_hz: 1_460,
         kind: SoundKind::Modifier,
         delayed_impulse: None,
@@ -98,7 +98,7 @@ const VOICES: [Voice; 7] = [
     Voice {
         path: "sounds/normal-01.wav",
         seed: 0x1357_9bdf,
-        frames: 1_440,
+        frames: 2_880,
         body_hz: 920,
         kind: SoundKind::Normal,
         delayed_impulse: None,
@@ -106,7 +106,7 @@ const VOICES: [Voice; 7] = [
     Voice {
         path: "sounds/normal-02.wav",
         seed: 0x2468_ace1,
-        frames: 1_536,
+        frames: 3_000,
         body_hz: 1_010,
         kind: SoundKind::Normal,
         delayed_impulse: None,
@@ -114,7 +114,7 @@ const VOICES: [Voice; 7] = [
     Voice {
         path: "sounds/normal-03.wav",
         seed: 0x6c8e_9cf3,
-        frames: 1_344,
+        frames: 2_640,
         body_hz: 850,
         kind: SoundKind::Normal,
         delayed_impulse: None,
@@ -122,10 +122,10 @@ const VOICES: [Voice; 7] = [
     Voice {
         path: "sounds/space-01.wav",
         seed: 0xb529_7a4d,
-        frames: 2_160,
+        frames: 4_800,
         body_hz: 520,
         kind: SoundKind::Space,
-        delayed_impulse: Some(960),
+        delayed_impulse: Some(900),
     },
 ];
 
@@ -236,48 +236,62 @@ fn encode_wav(samples: &[i16]) -> Result<Vec<u8>, GeneratorError> {
 }
 
 fn mechanical_sample(voice: Voice) -> Vec<i16> {
-    let (noise_gain, noise_end, body_gain, body_end, click_gain, attack_frames, release_frames) =
+    let (contact_gain, body_gain, shell_gain, contact_frames, body_frames, release_frames) =
         match voice.kind {
-            SoundKind::Normal => (11_141, 512, 7_209, 2_048, 12_451, 12, 160),
-            SoundKind::Space => (8_192, 2_048, 8_847, 4_096, 9_175, 18, 256),
-            SoundKind::Enter => (10_158, 1_536, 9_830, 3_072, 11_469, 14, 224),
-            SoundKind::Backspace => (9_503, 256, 5_898, 1_024, 13_762, 8, 144),
-            SoundKind::Modifier => (7_536, 128, 4_915, 768, 11_469, 6, 128),
+            SoundKind::Normal => (19_200, 12_400, 6_800, 260, 1_900, 180),
+            SoundKind::Space => (13_800, 17_400, 8_600, 340, 3_800, 300),
+            SoundKind::Enter => (16_200, 15_800, 8_200, 300, 3_200, 260),
+            SoundKind::Backspace => (20_400, 10_800, 7_800, 220, 1_700, 170),
+            SoundKind::Modifier => (18_600, 9_400, 6_400, 190, 1_350, 150),
         };
     let mut state = voice.seed;
+    let mut previous_noise = 0;
+    let mut fast_filter = 0;
+    let mut slow_filter = 0;
+    let mut body_filter = 0;
+    let body_smoothing = (SAMPLE_RATE / voice.body_hz).clamp(18, 72) as i64;
+    let mut samples = Vec::with_capacity(voice.frames);
 
-    (0..voice.frames)
-        .map(|index| {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            let noise = i64::from(state >> 16) - 32_768;
-            let noise_layer = scale_q15(
-                scale_q15(noise, noise_gain),
-                decay_envelope(index, voice.frames, noise_end),
+    for index in 0..voice.frames {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let noise = i64::from(state >> 16) - 32_768;
+        fast_filter += (noise - fast_filter) / 3;
+        slow_filter += (noise - slow_filter) / 14;
+        body_filter += (noise - body_filter) / body_smoothing;
+
+        let high_contact = noise - previous_noise;
+        let shell = fast_filter - slow_filter;
+        let contact = scale_q15(high_contact, impact_envelope(index, 0, contact_frames));
+        let bottom_out = scale_q15(body_filter, impact_envelope(index, 18, body_frames));
+        let case_resonance = scale_q15(
+            shell,
+            impact_envelope(index, 42, body_frames.saturating_mul(2) / 3),
+        );
+        let stabilizer = voice.delayed_impulse.map_or(0, |delay| {
+            let first = scale_q15(
+                high_contact,
+                impact_envelope(index, delay, contact_frames.saturating_mul(3) / 4),
             );
-            let resonant_tail = scale_q15(
-                scale_q15(
-                    oscillator_sample(index, voice.body_hz, 0x4000_0000),
-                    body_gain,
-                ),
-                decay_envelope(index, voice.frames, body_end),
+            let second = scale_q15(
+                shell,
+                impact_envelope(index, delay + 96, contact_frames / 2),
             );
-            let click = impulse(index, 36, 6_200, click_gain);
-            let delayed_click = voice.delayed_impulse.map_or(0, |delay| {
-                if index < delay {
-                    return 0;
-                }
-                let delayed_index = index - delay;
-                impulse(delayed_index, 64, 4_700, scale_q15(click_gain, 23_592))
-            });
-            let bounded_mix = (noise_layer + resonant_tail + click + delayed_click)
-                .clamp(-PEAK_LIMIT, PEAK_LIMIT);
-            let attack = attack_envelope(index, attack_frames);
-            let release = release_envelope(index, voice.frames, release_frames);
-            scale_q15(bounded_mix, scale_q15(attack, release)) as i16
-        })
-        .collect()
+            scale_q15(first + second, 15_600)
+        });
+        previous_noise = noise;
+
+        let mixed = scale_q15(contact, contact_gain)
+            + scale_q15(bottom_out, body_gain)
+            + scale_q15(case_resonance, shell_gain)
+            + stabilizer;
+        let attack = attack_envelope(index, 4);
+        let release = release_envelope(index, voice.frames, release_frames);
+        samples.push(scale_q15(mixed, scale_q15(attack, release)));
+    }
+
+    normalize_samples(samples)
 }
 
 fn scale_q15(value: i64, gain: i64) -> i64 {
@@ -291,11 +305,17 @@ fn attack_envelope(index: usize, attack_frames: usize) -> i64 {
     index as i64 * Q15_ONE / (attack_frames - 1) as i64
 }
 
-fn decay_envelope(index: usize, frames: usize, end_level: i64) -> i64 {
-    if frames <= 1 {
-        return end_level;
+fn impact_envelope(index: usize, start: usize, frames: usize) -> i64 {
+    if index < start || frames <= 1 {
+        return 0;
     }
-    Q15_ONE - (Q15_ONE - end_level) * index as i64 / (frames - 1) as i64
+    let elapsed = index - start;
+    if elapsed >= frames {
+        return 0;
+    }
+    let remaining = (frames - elapsed - 1) as i128;
+    let span = (frames - 1) as i128;
+    (i128::from(Q15_ONE) * remaining * remaining * remaining / (span * span * span)) as i64
 }
 
 fn release_envelope(index: usize, frames: usize, release_frames: usize) -> i64 {
@@ -309,32 +329,14 @@ fn release_envelope(index: usize, frames: usize, release_frames: usize) -> i64 {
     scale_q15(linear, linear)
 }
 
-fn impulse(index: usize, frames: usize, frequency: u32, gain: i64) -> i64 {
-    if index >= frames || frames <= 1 {
-        return 0;
+fn normalize_samples(mut samples: Vec<i64>) -> Vec<i16> {
+    let peak = samples.iter().map(|sample| sample.abs()).max().unwrap_or(1);
+    if peak > PEAK_LIMIT {
+        for sample in &mut samples {
+            *sample = *sample * PEAK_LIMIT / peak;
+        }
     }
-    let remaining = (frames - index - 1) as i64;
-    let linear = remaining * Q15_ONE / (frames - 1) as i64;
-    let envelope = scale_q15(linear, linear);
-    scale_q15(
-        scale_q15(oscillator_sample(index, frequency, 0), gain),
-        envelope,
-    )
-}
-
-fn oscillator_sample(index: usize, frequency: u32, phase_offset: u32) -> i64 {
-    let phase_step = (u64::from(frequency) << 32) / u64::from(SAMPLE_RATE);
-    let phase = (index as u64 * phase_step) as u32;
-    triangle_wave(phase.wrapping_add(phase_offset))
-}
-
-fn triangle_wave(phase: u32) -> i64 {
-    let position = i64::from(phase >> 16);
-    if position < 32_768 {
-        position * 2 - 32_767
-    } else {
-        98_303 - position * 2
-    }
+    samples.into_iter().map(|sample| sample as i16).collect()
 }
 
 #[cfg(test)]
@@ -347,7 +349,10 @@ mod tests {
     use hound::{SampleFormat, WavReader};
     use zip::{CompressionMethod, System, ZipArchive};
 
-    use super::{generate_archive, parse_output_argument, write_archive, GeneratorError};
+    use super::{
+        generate_archive, mechanical_sample, parse_output_argument, write_archive, GeneratorError,
+        VOICES,
+    };
 
     const EXPECTED_ENTRIES: [&str; 8] = [
         "manifest.json",
@@ -378,6 +383,38 @@ mod tests {
             assert!(
                 !synthesis.contains(forbidden),
                 "synthesis contains nondeterministic float operation: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn mechanical_samples_do_not_have_tonal_resonant_tails() {
+        for voice in VOICES {
+            let samples = mechanical_sample(voice);
+            let lag = (super::SAMPLE_RATE / voice.body_hz) as usize;
+            let start = 192.min(samples.len() / 4);
+            let end = samples.len().saturating_sub(lag + 32);
+            let first = &samples[start..end];
+            let delayed = &samples[start + lag..end + lag];
+            let dot = first
+                .iter()
+                .zip(delayed)
+                .map(|(left, right)| f64::from(*left) * f64::from(*right))
+                .sum::<f64>();
+            let first_energy = first
+                .iter()
+                .map(|sample| f64::from(*sample).powi(2))
+                .sum::<f64>();
+            let delayed_energy = delayed
+                .iter()
+                .map(|sample| f64::from(*sample).powi(2))
+                .sum::<f64>();
+            let correlation = dot.abs() / (first_energy * delayed_energy).sqrt();
+
+            assert!(
+                correlation < 0.45,
+                "{} has a tonal tail correlation of {correlation:.3}",
+                voice.path
             );
         }
     }
@@ -439,7 +476,7 @@ mod tests {
                 .samples::<i16>()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
-            assert!((864..=2_160).contains(&samples.len()));
+            assert!((1_920..=4_800).contains(&samples.len()));
             let peak = samples
                 .iter()
                 .map(|sample| sample.unsigned_abs())

@@ -405,6 +405,7 @@ mod tests {
         let installed = manager.install_bundled_default().unwrap();
 
         assert_eq!(installed.id().as_str(), "keyforge-mechanical");
+        assert_eq!(installed.pack_version().to_string(), "1.1.0");
         assert_eq!(installed.variant_counts().normal(), 3);
         assert_eq!(installed.variant_counts().space(), 1);
         assert_eq!(installed.variant_counts().enter(), 1);
