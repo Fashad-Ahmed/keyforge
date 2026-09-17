@@ -216,15 +216,26 @@ impl KeyForgeRuntime {
 
     pub(crate) fn snapshot(&self) -> RuntimeSnapshot {
         let inner = self.inner.lock().expect("runtime state mutex poisoned");
+        let group_counts = inner.group_counts.clone();
+        let pack_id = inner.pack_id.clone();
+        let pack_name = inner.pack_name.clone();
+        let sound_enabled = inner.sound_enabled;
+        let volume = inner.volume;
+        drop(inner);
+        let packs = self
+            .catalog()
+            .map(|catalog| catalog.packs().to_vec())
+            .unwrap_or_default();
         RuntimeSnapshot::new(
             self.audio_status(),
-            inner.group_counts.clone(),
+            group_counts,
             self.input_status,
-            inner.pack_id.clone(),
-            inner.pack_name.clone(),
-            inner.sound_enabled,
-            inner.volume,
+            pack_id,
+            pack_name,
+            sound_enabled,
+            volume,
         )
+        .with_packs(packs)
     }
 
     #[allow(dead_code)]

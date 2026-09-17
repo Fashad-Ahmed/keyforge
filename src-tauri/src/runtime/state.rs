@@ -1,4 +1,7 @@
-use crate::settings::{SettingsValidationError, ValidatedVolume};
+use crate::{
+    runtime::catalog::PackSummary,
+    settings::{SettingsValidationError, ValidatedVolume},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,6 +59,7 @@ pub(crate) struct RuntimeSnapshot {
     pub(crate) input_status: RuntimeInputStatus,
     pub(crate) pack_id: String,
     pub(crate) pack_name: String,
+    pub(crate) packs: Vec<PackSummary>,
     pub(crate) sound_enabled: bool,
     pub(crate) volume: f32,
 }
@@ -76,9 +80,15 @@ impl RuntimeSnapshot {
             input_status,
             pack_id,
             pack_name,
+            packs: Vec::new(),
             sound_enabled,
             volume: volume.get(),
         }
+    }
+
+    pub(crate) fn with_packs(mut self, packs: Vec<PackSummary>) -> Self {
+        self.packs = packs;
+        self
     }
 
     #[cfg(test)]
@@ -92,6 +102,13 @@ impl RuntimeSnapshot {
             true,
             ValidatedVolume::new(1.0).unwrap(),
         )
+        .with_packs(vec![PackSummary::new(
+            "keyforge-mechanical",
+            "KeyForge Mechanical",
+            true,
+            true,
+            RuntimeGroupCounts::new(3, 1, 1, 1, 1),
+        )])
     }
 }
 
@@ -152,6 +169,7 @@ mod tests {
                 "inputStatus",
                 "packId",
                 "packName",
+                "packs",
                 "soundEnabled",
                 "volume",
             ]
