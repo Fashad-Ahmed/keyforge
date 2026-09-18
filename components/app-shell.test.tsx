@@ -259,3 +259,19 @@ it("keeps the active instrument visible when catalog discovery is unavailable", 
   expect(await screen.findByRole("heading", { name: "KeyForge Mechanical" })).toBeInTheDocument();
   expect(screen.getByText("Active")).toBeInTheDocument();
 });
+
+it("identifies every built-in profile when catalog discovery is unavailable", async () => {
+  getRuntimeStatusMock.mockResolvedValue({
+    audioStatus: "ready",
+    groupCounts: { normal: 3, space: 1, enter: 1, backspace: 1, modifier: 1 },
+    inputStatus: "ready",
+    packId: "keyforge-deep-thock",
+    packName: "Deep Thock",
+    packs: [],
+    soundEnabled: true,
+    volume: 0.78,
+  });
+  render(<AppShell />);
+
+  expect(await screen.findByText("3 voices · Included")).toBeInTheDocument();
+});

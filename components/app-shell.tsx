@@ -28,6 +28,13 @@ type SoundRuntime =
   | { state: "unavailable" };
 type Message = { kind: "error" | "success"; text: string } | null;
 
+const BUNDLED_PACK_IDS = new Set([
+  "keyforge-mechanical",
+  "keyforge-deep-thock",
+  "keyforge-crisp-click",
+  "keyforge-soft-linear",
+]);
+
 export function AppShell() {
   const [runtime, setRuntime] = useState<NativeRuntime>({ state: "connecting" });
   const [soundRuntime, setSoundRuntime] = useState<SoundRuntime>({ state: "connecting" });
@@ -53,7 +60,7 @@ export function AppShell() {
     : soundStatus
       ? [{
           active: true,
-          bundled: soundStatus.packId === "keyforge-mechanical",
+          bundled: BUNDLED_PACK_IDS.has(soundStatus.packId),
           groupCounts: soundStatus.groupCounts,
           id: soundStatus.packId,
           name: soundStatus.packName,
