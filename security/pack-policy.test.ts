@@ -25,7 +25,10 @@ const EXPECTED_PACK_FILES = [
 ] as const;
 const EXPECTED_ASSETS = [
   "src-tauri/assets/packs/README.md",
+  "src-tauri/assets/packs/keyforge-crisp-click.zip",
+  "src-tauri/assets/packs/keyforge-deep-thock.zip",
   "src-tauri/assets/packs/keyforge-mechanical.zip",
+  "src-tauri/assets/packs/keyforge-soft-linear.zip",
 ] as const;
 const EXPECTED_PACK_DEPENDENCIES = [
   'hound = "3.5.1"',
@@ -589,7 +592,7 @@ it("keeps the reviewed pack source and asset sets exact", () => {
   );
   expect(
     enumerateFiles("src-tauri/assets/packs").every(
-      (path) => path.endsWith(".md") || path === EXPECTED_ASSETS[1],
+      (path) => path.endsWith(".md") || path.endsWith(".zip"),
     ),
   ).toBe(true);
 });
