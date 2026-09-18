@@ -18,7 +18,7 @@ use crate::settings::{AppSettings, SettingsHealth, SettingsStore};
 use crate::{
     audio::{AudioEngine, AudioEngineHandle, AudioEngineStatus, VolumeError},
     input::{self, InputListener, InputStatus, SoundEvent},
-    pack::{PackId, PackInstallError, PackManager},
+    pack::{is_bundled_pack_id, PackId, PackInstallError, PackManager},
 };
 use catalog::{PackCatalog, PackSummary};
 use selector::SoundSelector;
@@ -88,16 +88,12 @@ impl KeyForgeRuntime {
         let settings = loaded_settings.settings().clone();
         let manager =
             PackManager::open(app_data_dir.join("packs")).map_err(|_| RuntimeStartError::Pack)?;
-        let bundled = match manager.install_bundled_default() {
-            Ok(installed) => installed,
-            Err(PackInstallError::DuplicateId) => manager
-                .discover()
-                .map_err(|_| RuntimeStartError::Pack)?
-                .into_iter()
-                .find(|pack| pack.id().as_str() == "keyforge-mechanical")
-                .ok_or(RuntimeStartError::Pack)?,
-            Err(_) => return Err(RuntimeStartError::Pack),
-        };
+        let bundled = manager
+            .install_bundled_profiles()
+            .map_err(|_| RuntimeStartError::Pack)?
+            .into_iter()
+            .find(|pack| pack.id().as_str() == "keyforge-mechanical")
+            .ok_or(RuntimeStartError::Pack)?;
         let selected = manager
             .discover()
             .map_err(|_| RuntimeStartError::Pack)?
@@ -316,7 +312,7 @@ impl KeyForgeRuntime {
                 PackSummary::new(
                     pack.id().as_str(),
                     pack.name(),
-                    pack.id().as_str() == "keyforge-mechanical",
+                    is_bundled_pack_id(pack.id().as_str()),
                     pack.id().as_str() == active_id,
                     RuntimeGroupCounts::new(
                         counts.normal(),

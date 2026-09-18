@@ -35,6 +35,23 @@ pub(crate) use storage::{PackStorage, StoredDecodedPack, StoredPackMetadata};
 pub const MAX_DECODED_PACK_BYTES: usize = 64 * 1024 * 1024;
 
 const BUNDLED_DEFAULT_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-mechanical.zip");
+const BUNDLED_DEEP_THOCK_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-deep-thock.zip");
+const BUNDLED_CRISP_CLICK_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-crisp-click.zip");
+const BUNDLED_SOFT_LINEAR_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-soft-linear.zip");
+const BUNDLED_PACKS: [(&str, &[u8]); 4] = [
+    ("keyforge-mechanical", BUNDLED_DEFAULT_PACK),
+    ("keyforge-deep-thock", BUNDLED_DEEP_THOCK_PACK),
+    ("keyforge-crisp-click", BUNDLED_CRISP_CLICK_PACK),
+    ("keyforge-soft-linear", BUNDLED_SOFT_LINEAR_PACK),
+];
+
+pub(crate) fn is_bundled_pack_id(id: &str) -> bool {
+    BUNDLED_PACKS
+        .iter()
+        .any(|(bundled_id, _)| *bundled_id == id)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ValidatedPack {
@@ -327,8 +344,32 @@ impl PackManager {
     }
 
     pub fn install_bundled_default(&self) -> Result<InstalledPack, PackInstallError> {
-        let cursor = Cursor::new(BUNDLED_DEFAULT_PACK);
-        let pack = validate_archive(cursor, BUNDLED_DEFAULT_PACK.len() as u64)?;
+        self.install_bundled(BUNDLED_DEFAULT_PACK)
+    }
+
+    pub fn install_bundled_profiles(&self) -> Result<Vec<InstalledPack>, PackInstallError> {
+        let mut installed = Vec::with_capacity(BUNDLED_PACKS.len());
+        for (expected_id, archive) in BUNDLED_PACKS {
+            match self.install_bundled(archive) {
+                Ok(pack) => installed.push(pack),
+                Err(PackInstallError::DuplicateId) => {
+                    let existing = self
+                        .discover()
+                        .map_err(PackInstallError::from)?
+                        .into_iter()
+                        .find(|pack| pack.id().as_str() == expected_id)
+                        .ok_or(PackInstallError::DuplicateId)?;
+                    installed.push(existing);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(installed)
+    }
+
+    fn install_bundled(&self, archive: &'static [u8]) -> Result<InstalledPack, PackInstallError> {
+        let cursor = Cursor::new(archive);
+        let pack = validate_archive(cursor, archive.len() as u64)?;
         self.storage
             .install_validated(pack)
             .map(InstalledPack::from)
@@ -414,6 +455,29 @@ mod tests {
         let decoded = manager.decode(installed.id()).unwrap();
         assert_eq!(decoded.metadata(), &installed);
         assert_eq!(decoded.metadata().variant_counts().total(), 7);
+    }
+
+    #[test]
+    fn bundled_profiles_install_through_the_production_validator() {
+        let root = TestRoot::new();
+        let manager = PackManager::open(root.path().join("managed")).unwrap();
+
+        let installed = manager.install_bundled_profiles().unwrap();
+        let identities = installed
+            .iter()
+            .map(|pack| (pack.id().as_str(), pack.name()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            identities,
+            vec![
+                ("keyforge-mechanical", "Classic Mechanical"),
+                ("keyforge-deep-thock", "Deep Thock"),
+                ("keyforge-crisp-click", "Crisp Click"),
+                ("keyforge-soft-linear", "Soft Linear"),
+            ]
+        );
+        assert_eq!(manager.discover().unwrap().len(), 4);
     }
 
     #[test]
