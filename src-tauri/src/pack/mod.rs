@@ -391,18 +391,23 @@ impl PackManager {
     pub fn install_bundled_profiles(&self) -> Result<Vec<InstalledPack>, PackInstallError> {
         let mut installed = Vec::with_capacity(BUNDLED_PACKS.len());
         for (expected_id, archive) in BUNDLED_PACKS {
-            match self.install_bundled(archive) {
-                Ok(pack) => installed.push(pack),
-                Err(PackInstallError::DuplicateId) => {
+            let expected = validate_archive(Cursor::new(archive), archive.len() as u64)?;
+            if expected.manifest().id().as_str() != expected_id {
+                return Err(PackInstallError::DuplicateId);
+            }
+            match self.storage.install_validated(expected.clone()) {
+                Ok(metadata) => installed.push(metadata.into()),
+                Err(PackStorageError::DuplicateId) => {
                     let existing = self
-                        .discover()
-                        .map_err(PackInstallError::from)?
-                        .into_iter()
-                        .find(|pack| pack.id().as_str() == expected_id)
-                        .ok_or(PackInstallError::DuplicateId)?;
-                    installed.push(existing);
+                        .storage
+                        .load_installed(expected.manifest().id())
+                        .map_err(PackInstallError::from)?;
+                    if !stored_pack_matches_validated(&existing, &expected) {
+                        return Err(PackInstallError::DuplicateId);
+                    }
+                    installed.push(existing.metadata.into());
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(installed)
@@ -435,6 +440,27 @@ impl PackManager {
             sounds,
         })
     }
+}
+
+fn stored_pack_matches_validated(stored: &StoredDecodedPack, expected: &ValidatedPack) -> bool {
+    let manifest = expected.manifest();
+    let expected_counts = [
+        manifest.sounds().normal().len(),
+        manifest.sounds().space().len(),
+        manifest.sounds().enter().len(),
+        manifest.sounds().backspace().len(),
+        manifest.sounds().modifier().len(),
+    ];
+    stored.metadata.id == *manifest.id()
+        && stored.metadata.name == manifest.name()
+        && stored.metadata.pack_version == manifest.pack_version()
+        && stored.metadata.variant_counts == expected_counts
+        && stored.sounds.total_len() == expected.sounds().total_len()
+        && stored
+            .sounds
+            .iter()
+            .zip(expected.sounds().iter())
+            .all(|(actual, expected)| actual == expected.sample())
 }
 
 impl From<PackArchiveError> for PackInstallError {
@@ -531,6 +557,22 @@ mod tests {
             ]
         );
         assert_eq!(manager.discover().unwrap().len(), 16);
+    }
+
+    #[test]
+    fn bundled_profiles_reject_a_preexisting_pack_with_a_reserved_identity() {
+        let root = TestRoot::new();
+        let source = root.write_file(
+            "colliding-arcade.zip",
+            &valid_pack_zip_with_identity("keyforge-arcade", "Not the Bundled Arcade"),
+        );
+        let manager = PackManager::open(root.path().join("managed")).unwrap();
+        manager.install_zip(&source).unwrap();
+
+        assert_eq!(
+            manager.install_bundled_profiles(),
+            Err(PackInstallError::DuplicateId)
+        );
     }
 
     #[test]
