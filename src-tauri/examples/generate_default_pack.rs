@@ -81,7 +81,7 @@ const PROFILES: [Profile; 16] = [
         name: "Creamy Tactile",
         version: "1.0.0",
         seed_mask: 0x31d7_80a5,
-        contact_gain: 18_200,
+        contact_gain: 8_000,
         body_gain: 30_500,
         shell_gain: 14_200,
         body_smoothing: 48_000,
@@ -170,7 +170,7 @@ const PROFILES: [Profile; 16] = [
         shell_gain: 7_200,
         body_smoothing: 54_000,
         duration_scale: 30_000,
-        body_decay_power: 4,
+        body_decay_power: 8,
     },
     Profile {
         id: "keyforge-retro-terminal",
@@ -194,7 +194,7 @@ const PROFILES: [Profile; 16] = [
         shell_gain: 27_500,
         body_smoothing: 14_000,
         duration_scale: 14_000,
-        body_decay_power: 3,
+        body_decay_power: 1,
     },
     Profile {
         id: "keyforge-soft-office",
@@ -719,35 +719,54 @@ mod tests {
 
     #[test]
     fn every_profile_pair_has_a_distinct_perceptual_signature() {
-        let normal = VOICES
-            .into_iter()
-            .find(|voice| voice.path == "sounds/normal-01.wav")
-            .unwrap();
         let signatures = PROFILES
             .into_iter()
             .map(|profile| {
-                let samples = mechanical_sample(normal, profile);
-                let total_energy = samples
-                    .iter()
-                    .map(|sample| i64::from(*sample).pow(2))
-                    .sum::<i64>()
-                    .max(1);
-                let early_energy = samples
-                    .iter()
-                    .take(64)
-                    .map(|sample| i64::from(*sample).pow(2))
-                    .sum::<i64>();
-                let crossings = samples
-                    .windows(2)
-                    .filter(|pair| pair[0].is_negative() != pair[1].is_negative())
-                    .count();
-                let rms = (total_energy as f64 / samples.len() as f64).sqrt();
+                let mut attack_share = 0.0;
+                let mut crossing_rate = 0.0;
+                let mut roughness = 0.0;
+                let mut energy_centroid = 0.0;
+                for voice in VOICES {
+                    let samples = mechanical_sample(voice, profile);
+                    let total_energy = samples
+                        .iter()
+                        .map(|sample| i64::from(*sample).pow(2))
+                        .sum::<i64>()
+                        .max(1) as f64;
+                    let early_energy = samples
+                        .iter()
+                        .take(96)
+                        .map(|sample| i64::from(*sample).pow(2))
+                        .sum::<i64>() as f64;
+                    let crossings = samples
+                        .windows(2)
+                        .filter(|pair| pair[0].is_negative() != pair[1].is_negative())
+                        .count();
+                    let difference_energy = samples
+                        .windows(2)
+                        .map(|pair| i64::from(pair[1]) - i64::from(pair[0]))
+                        .map(|difference| difference.pow(2))
+                        .sum::<i64>() as f64;
+                    let centroid = samples
+                        .iter()
+                        .enumerate()
+                        .map(|(index, sample)| index as f64 * i64::from(*sample).pow(2) as f64)
+                        .sum::<f64>()
+                        / total_energy
+                        / samples.len() as f64;
+
+                    attack_share += early_energy / total_energy;
+                    crossing_rate += crossings as f64 / samples.len() as f64;
+                    roughness += difference_energy / total_energy;
+                    energy_centroid += centroid;
+                }
+                let voice_count = VOICES.len() as f64;
                 (
                     profile.id,
-                    samples.len() as f64,
-                    early_energy as f64 / total_energy as f64,
-                    crossings as f64 / samples.len() as f64,
-                    rms,
+                    attack_share / voice_count,
+                    crossing_rate / voice_count,
+                    roughness / voice_count,
+                    energy_centroid / voice_count,
                 )
             })
             .collect::<Vec<_>>();
@@ -755,22 +774,28 @@ mod tests {
         let mut overlaps = Vec::new();
         for left in 0..signatures.len() {
             for right in left + 1..signatures.len() {
-                let (left_id, left_frames, left_attack, left_crossings, left_rms) =
+                let (left_id, left_attack, left_crossings, left_roughness, left_centroid) =
                     signatures[left];
-                let (right_id, right_frames, right_attack, right_crossings, right_rms) =
+                let (right_id, right_attack, right_crossings, right_roughness, right_centroid) =
                     signatures[right];
-                let duration_ratio = left_frames.max(right_frames) / left_frames.min(right_frames);
-                let rms_ratio = left_rms.max(right_rms) / left_rms.min(right_rms).max(1.0);
-                let separated = duration_ratio >= 1.15
-                    || (left_attack - right_attack).abs() >= 0.08
-                    || (left_crossings - right_crossings).abs() >= 0.08
-                    || rms_ratio >= 1.3;
+                let attack_distance = (left_attack - right_attack).abs() / 0.025;
+                let centroid_distance = (left_centroid - right_centroid).abs() / 0.02;
+                let crossing_distance = (left_crossings - right_crossings).abs() / 0.015;
+                let roughness_distance = (left_roughness - right_roughness).abs() / 0.08;
+                let perceptual_distance = (attack_distance.powi(2)
+                    + centroid_distance.powi(2)
+                    + crossing_distance.powi(2)
+                    + roughness_distance.powi(2))
+                .sqrt();
+                let separated = perceptual_distance >= 1.0;
 
                 if !separated {
                     overlaps.push(format!(
-                        "{left_id} and {right_id}: duration {duration_ratio:.2}, attack delta {:.3}, crossing delta {:.3}, rms {rms_ratio:.2}",
+                        "{left_id} and {right_id}: attack delta {:.3}, centroid delta {:.3}, crossing delta {:.3}, roughness delta {:.3}",
                         (left_attack - right_attack).abs(),
+                        (left_centroid - right_centroid).abs(),
                         (left_crossings - right_crossings).abs(),
+                        (left_roughness - right_roughness).abs(),
                     ));
                 }
             }
