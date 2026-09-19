@@ -25,10 +25,22 @@ const EXPECTED_PACK_FILES = [
 ] as const;
 const EXPECTED_ASSETS = [
   "src-tauri/assets/packs/README.md",
+  "src-tauri/assets/packs/keyforge-arcade.zip",
+  "src-tauri/assets/packs/keyforge-buckling-spring.zip",
+  "src-tauri/assets/packs/keyforge-clacky-aluminum.zip",
   "src-tauri/assets/packs/keyforge-crisp-click.zip",
+  "src-tauri/assets/packs/keyforge-creamy-tactile.zip",
+  "src-tauri/assets/packs/keyforge-dampened-polycarbonate.zip",
   "src-tauri/assets/packs/keyforge-deep-thock.zip",
+  "src-tauri/assets/packs/keyforge-marble-thock.zip",
   "src-tauri/assets/packs/keyforge-mechanical.zip",
+  "src-tauri/assets/packs/keyforge-poppy-tactile.zip",
+  "src-tauri/assets/packs/keyforge-retro-terminal.zip",
+  "src-tauri/assets/packs/keyforge-sci-fi-console.zip",
+  "src-tauri/assets/packs/keyforge-silent-mechanical.zip",
   "src-tauri/assets/packs/keyforge-soft-linear.zip",
+  "src-tauri/assets/packs/keyforge-soft-office.zip",
+  "src-tauri/assets/packs/keyforge-vintage-typewriter.zip",
 ] as const;
 const EXPECTED_PACK_DEPENDENCIES = [
   'hound = "3.5.1"',

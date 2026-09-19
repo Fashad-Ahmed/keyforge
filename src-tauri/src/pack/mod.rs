@@ -40,11 +40,52 @@ const BUNDLED_CRISP_CLICK_PACK: &[u8] =
     include_bytes!("../../assets/packs/keyforge-crisp-click.zip");
 const BUNDLED_SOFT_LINEAR_PACK: &[u8] =
     include_bytes!("../../assets/packs/keyforge-soft-linear.zip");
-const BUNDLED_PACKS: [(&str, &[u8]); 4] = [
+const BUNDLED_CREAMY_TACTILE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-creamy-tactile.zip");
+const BUNDLED_SILENT_MECHANICAL_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-silent-mechanical.zip");
+const BUNDLED_BUCKLING_SPRING_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-buckling-spring.zip");
+const BUNDLED_VINTAGE_TYPEWRITER_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-vintage-typewriter.zip");
+const BUNDLED_MARBLE_THOCK_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-marble-thock.zip");
+const BUNDLED_POPPY_TACTILE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-poppy-tactile.zip");
+const BUNDLED_CLACKY_ALUMINUM_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-clacky-aluminum.zip");
+const BUNDLED_DAMPENED_POLYCARBONATE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-dampened-polycarbonate.zip");
+const BUNDLED_RETRO_TERMINAL_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-retro-terminal.zip");
+const BUNDLED_ARCADE_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-arcade.zip");
+const BUNDLED_SOFT_OFFICE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-soft-office.zip");
+const BUNDLED_SCI_FI_CONSOLE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-sci-fi-console.zip");
+const BUNDLED_PACKS: [(&str, &[u8]); 16] = [
     ("keyforge-mechanical", BUNDLED_DEFAULT_PACK),
     ("keyforge-deep-thock", BUNDLED_DEEP_THOCK_PACK),
     ("keyforge-crisp-click", BUNDLED_CRISP_CLICK_PACK),
     ("keyforge-soft-linear", BUNDLED_SOFT_LINEAR_PACK),
+    ("keyforge-creamy-tactile", BUNDLED_CREAMY_TACTILE_PACK),
+    ("keyforge-silent-mechanical", BUNDLED_SILENT_MECHANICAL_PACK),
+    ("keyforge-buckling-spring", BUNDLED_BUCKLING_SPRING_PACK),
+    (
+        "keyforge-vintage-typewriter",
+        BUNDLED_VINTAGE_TYPEWRITER_PACK,
+    ),
+    ("keyforge-marble-thock", BUNDLED_MARBLE_THOCK_PACK),
+    ("keyforge-poppy-tactile", BUNDLED_POPPY_TACTILE_PACK),
+    ("keyforge-clacky-aluminum", BUNDLED_CLACKY_ALUMINUM_PACK),
+    (
+        "keyforge-dampened-polycarbonate",
+        BUNDLED_DAMPENED_POLYCARBONATE_PACK,
+    ),
+    ("keyforge-retro-terminal", BUNDLED_RETRO_TERMINAL_PACK),
+    ("keyforge-arcade", BUNDLED_ARCADE_PACK),
+    ("keyforge-soft-office", BUNDLED_SOFT_OFFICE_PACK),
+    ("keyforge-sci-fi-console", BUNDLED_SCI_FI_CONSOLE_PACK),
 ];
 
 pub(crate) fn is_bundled_pack_id(id: &str) -> bool {
@@ -475,9 +516,21 @@ mod tests {
                 ("keyforge-deep-thock", "Deep Thock"),
                 ("keyforge-crisp-click", "Crisp Click"),
                 ("keyforge-soft-linear", "Soft Linear"),
+                ("keyforge-creamy-tactile", "Creamy Tactile"),
+                ("keyforge-silent-mechanical", "Silent Mechanical"),
+                ("keyforge-buckling-spring", "Buckling Spring"),
+                ("keyforge-vintage-typewriter", "Vintage Typewriter"),
+                ("keyforge-marble-thock", "Marble Thock"),
+                ("keyforge-poppy-tactile", "Poppy Tactile"),
+                ("keyforge-clacky-aluminum", "Clacky Aluminum"),
+                ("keyforge-dampened-polycarbonate", "Dampened Polycarbonate",),
+                ("keyforge-retro-terminal", "Retro Terminal"),
+                ("keyforge-arcade", "Arcade"),
+                ("keyforge-soft-office", "Soft Office"),
+                ("keyforge-sci-fi-console", "Sci-Fi Console"),
             ]
         );
-        assert_eq!(manager.discover().unwrap().len(), 4);
+        assert_eq!(manager.discover().unwrap().len(), 16);
     }
 
     #[test]
