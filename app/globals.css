@@ -15,8 +15,9 @@
 }
 
 * { box-sizing: border-box; }
-html { background: var(--canvas); }
+html { min-width: 0; background: var(--canvas); }
 body {
+  min-width: 0;
   margin: 0;
   background:
     radial-gradient(circle at 10% 7%, rgba(69, 48, 118, 0.18), transparent 35rem),
@@ -30,6 +31,7 @@ button { color: inherit; }
 
 .keyforge-shell {
   min-height: 100dvh;
+  min-width: 0;
   display: grid;
   place-items: center;
   padding: clamp(0.7rem, 2.2vw, 1.5rem);
@@ -37,10 +39,14 @@ button { color: inherit; }
 
 .instrument-frame {
   width: min(100%, 720px);
-  min-height: calc(100dvh - clamp(1.4rem, 4.4vw, 3rem));
+  height: calc(100dvh - clamp(1.4rem, 4.4vw, 3rem));
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: rgba(88, 223, 190, 0.45) transparent;
+  scrollbar-width: thin;
   border: 2px solid var(--frame);
   border-radius: 2rem;
   background: rgba(6, 14, 15, 0.94);
@@ -51,6 +57,9 @@ button { color: inherit; }
 }
 
 .instrument-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
@@ -73,6 +82,7 @@ button { color: inherit; }
 
 .instrument-body {
   flex: 1;
+  min-width: 0;
   padding: clamp(1.5rem, 4vh, 2.6rem) clamp(1.4rem, 5vw, 2.8rem) 1.6rem;
   background-image:
     linear-gradient(rgba(80, 122, 119, 0.07) 1px, transparent 1px),
@@ -155,11 +165,11 @@ button:disabled { cursor: wait; opacity: 0.55; transform: none; }
 
 @media (max-width: 620px), (max-height: 760px) {
   .keyforge-shell { place-items: start stretch; padding: 0; }
-  .instrument-frame { min-height: 100dvh; border-width: 0; border-radius: 0; }
+  .instrument-frame { width: 100%; height: 100dvh; border-width: 0; border-radius: 0; }
   .instrument-header { padding: 1.2rem 1.25rem 1rem; }
   .header-meta { display: none; }
   .instrument-body { padding: 1.35rem 1.25rem 1rem; }
-  .profile-panel h2 { font-size: clamp(3rem, 13vw, 4.25rem); }
+  .profile-panel h2 { font-size: clamp(2.65rem, 12vw, 4.25rem); }
   .profile-description { margin-top: 1rem; }
   .control-heading, .volume-control { min-height: 112px; padding: 1rem; }
   .library-panel { padding: 1rem 1rem 0.25rem; }
@@ -170,6 +180,21 @@ button:disabled { cursor: wait; opacity: 0.55; transform: none; }
   .controls-panel { grid-template-columns: 1fr; }
   .section-heading { flex-direction: column; }
   .import-button { width: 100%; }
+  .instrument-footer { flex-direction: column; gap: 0.25rem; }
+}
+
+@media (max-width: 390px) {
+  .instrument-header { gap: 0.85rem; padding: 1rem; }
+  .brand-lockup { gap: 0.8rem; }
+  .brand-lockup p { font-size: 1.05rem; }
+  .window-marks { gap: 0.35rem; }
+  .window-marks i { width: 8px; height: 8px; }
+  .instrument-body { padding: 1.1rem 1rem 0.9rem; }
+  .profile-panel { padding-bottom: 0.9rem; }
+  .profile-panel h2 { font-size: clamp(2.35rem, 13vw, 3.15rem); line-height: 0.9; }
+  .profile-description { margin-top: 0.8rem; font-size: 0.82rem; }
+  .control-heading, .volume-control { min-height: 98px; }
+  .pack-row { grid-template-columns: 26px minmax(0, 1fr) auto; gap: 0.55rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -15,8 +15,8 @@
         "title": "KeyForge",
         "width": 760,
         "height": 800,
-        "minWidth": 600,
-        "minHeight": 680,
+        "minWidth": 360,
+        "minHeight": 520,
         "resizable": true,
         "fullscreen": false
       }

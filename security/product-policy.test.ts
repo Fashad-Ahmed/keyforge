@@ -77,7 +77,7 @@ it("documents product settings, import, activation, and tray boundaries", () => 
   }
 });
 
-it("uses a focused portrait product window", () => {
+it("uses a focused product window that can resize to a compact layout", () => {
   const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")) as {
     app: { windows: Array<Record<string, unknown>> };
   };
@@ -85,8 +85,8 @@ it("uses a focused portrait product window", () => {
   expect(config.app.windows).toEqual([
     expect.objectContaining({
       height: 800,
-      minHeight: 680,
-      minWidth: 600,
+      minHeight: 520,
+      minWidth: 360,
       width: 760,
     }),
   ]);
