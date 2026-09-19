@@ -23,48 +23,58 @@ struct Profile {
     body_gain: i64,
     shell_gain: i64,
     body_smoothing: i64,
+    duration_scale: i64,
+    body_decay_power: u32,
 }
 
 const PROFILES: [Profile; 4] = [
     Profile {
         id: "keyforge-mechanical",
         name: "Classic Mechanical",
-        version: "1.1.0",
+        version: "1.2.0",
         seed_mask: 0,
         contact_gain: Q15_ONE,
         body_gain: Q15_ONE,
         shell_gain: Q15_ONE,
         body_smoothing: Q15_ONE,
+        duration_scale: Q15_ONE,
+        body_decay_power: 3,
     },
     Profile {
         id: "keyforge-deep-thock",
         name: "Deep Thock",
-        version: "1.0.0",
+        version: "1.1.0",
         seed_mask: 0xa391_6f2d,
         contact_gain: 20_500,
         body_gain: 32_767,
         shell_gain: 21_500,
-        body_smoothing: 32_767,
+        body_smoothing: 46_000,
+        duration_scale: 49_152,
+        body_decay_power: 1,
     },
     Profile {
         id: "keyforge-crisp-click",
         name: "Crisp Click",
-        version: "1.0.0",
+        version: "1.1.0",
         seed_mask: 0x4c17_b8e3,
         contact_gain: 32_767,
         body_gain: 17_800,
         shell_gain: 29_500,
-        body_smoothing: 18_500,
+        body_smoothing: 13_000,
+        duration_scale: 18_022,
+        body_decay_power: 4,
     },
     Profile {
         id: "keyforge-soft-linear",
         name: "Soft Linear",
-        version: "1.0.0",
+        version: "1.1.0",
         seed_mask: 0xd248_31ac,
         contact_gain: 13_800,
         body_gain: 18_500,
         shell_gain: 11_500,
-        body_smoothing: 27_000,
+        body_smoothing: 42_000,
+        duration_scale: 23_593,
+        body_decay_power: 3,
     },
 ];
 
@@ -314,6 +324,13 @@ fn mechanical_sample(voice: Voice, profile: Profile) -> Vec<i16> {
             SoundKind::Backspace => (20_400, 10_800, 7_800, 220, 1_700, 170),
             SoundKind::Modifier => (18_600, 9_400, 6_400, 190, 1_350, 150),
         };
+    let frames = scale_frames(voice.frames, profile.duration_scale);
+    let contact_frames = scale_frames(contact_frames, profile.duration_scale);
+    let body_frames = scale_frames(body_frames, profile.duration_scale);
+    let release_frames = scale_frames(release_frames, profile.duration_scale);
+    let delayed_impulse = voice
+        .delayed_impulse
+        .map(|delay| scale_frames(delay, profile.duration_scale));
     let mut state = voice.seed ^ profile.seed_mask;
     let mut previous_noise = 0;
     let mut fast_filter = 0;
@@ -321,9 +338,9 @@ fn mechanical_sample(voice: Voice, profile: Profile) -> Vec<i16> {
     let mut body_filter = 0;
     let base_smoothing = (SAMPLE_RATE / voice.body_hz).clamp(18, 72) as i64;
     let body_smoothing = scale_q15(base_smoothing, profile.body_smoothing).clamp(10, 90);
-    let mut samples = Vec::with_capacity(voice.frames);
+    let mut samples = Vec::with_capacity(frames);
 
-    for index in 0..voice.frames {
+    for index in 0..frames {
         state ^= state << 13;
         state ^= state >> 17;
         state ^= state << 5;
@@ -335,12 +352,15 @@ fn mechanical_sample(voice: Voice, profile: Profile) -> Vec<i16> {
         let high_contact = noise - previous_noise;
         let shell = fast_filter - slow_filter;
         let contact = scale_q15(high_contact, impact_envelope(index, 0, contact_frames));
-        let bottom_out = scale_q15(body_filter, impact_envelope(index, 18, body_frames));
+        let bottom_out = scale_q15(
+            body_filter,
+            impact_envelope_power(index, 18, body_frames, profile.body_decay_power),
+        );
         let case_resonance = scale_q15(
             shell,
             impact_envelope(index, 42, body_frames.saturating_mul(2) / 3),
         );
-        let stabilizer = voice.delayed_impulse.map_or(0, |delay| {
+        let stabilizer = delayed_impulse.map_or(0, |delay| {
             let first = scale_q15(
                 high_contact,
                 impact_envelope(index, delay, contact_frames.saturating_mul(3) / 4),
@@ -358,11 +378,15 @@ fn mechanical_sample(voice: Voice, profile: Profile) -> Vec<i16> {
             + scale_q15(scale_q15(case_resonance, shell_gain), profile.shell_gain)
             + stabilizer;
         let attack = attack_envelope(index, 4);
-        let release = release_envelope(index, voice.frames, release_frames);
+        let release = release_envelope(index, frames, release_frames);
         samples.push(scale_q15(mixed, scale_q15(attack, release)));
     }
 
     normalize_samples(samples)
+}
+
+fn scale_frames(frames: usize, scale: i64) -> usize {
+    ((frames as i64 * scale / Q15_ONE).max(1)) as usize
 }
 
 fn scale_q15(value: i64, gain: i64) -> i64 {
@@ -377,6 +401,10 @@ fn attack_envelope(index: usize, attack_frames: usize) -> i64 {
 }
 
 fn impact_envelope(index: usize, start: usize, frames: usize) -> i64 {
+    impact_envelope_power(index, start, frames, 3)
+}
+
+fn impact_envelope_power(index: usize, start: usize, frames: usize, power: u32) -> i64 {
     if index < start || frames <= 1 {
         return 0;
     }
@@ -386,7 +414,11 @@ fn impact_envelope(index: usize, start: usize, frames: usize) -> i64 {
     }
     let remaining = (frames - elapsed - 1) as i128;
     let span = (frames - 1) as i128;
-    (i128::from(Q15_ONE) * remaining * remaining * remaining / (span * span * span)) as i64
+    (i128::from(Q15_ONE) * integer_power(remaining, power) / integer_power(span, power)) as i64
+}
+
+fn integer_power(value: i128, exponent: u32) -> i128 {
+    (0..exponent).fold(1, |result, _| result * value)
 }
 
 fn release_envelope(index: usize, frames: usize, release_frames: usize) -> i64 {
@@ -459,6 +491,51 @@ mod tests {
                 assert_ne!(archives[left], archives[right]);
             }
         }
+    }
+
+    #[test]
+    fn profiles_have_distinct_perceptual_envelopes() {
+        let normal = VOICES
+            .into_iter()
+            .find(|voice| voice.path == "sounds/normal-01.wav")
+            .unwrap();
+        let classic = mechanical_sample(normal, PROFILES[0]);
+        let thock = mechanical_sample(normal, PROFILES[1]);
+        let click = mechanical_sample(normal, PROFILES[2]);
+        let linear = mechanical_sample(normal, PROFILES[3]);
+
+        assert!(thock.len() >= 3_600, "thock must have a long body decay");
+        assert!(click.len() <= 1_800, "click must be short and immediate");
+        assert!(linear.len() <= 2_200, "linear must be short and damped");
+        assert!(classic.len() > linear.len(), "classic must outlast linear");
+
+        let early_energy = |samples: &[i16]| {
+            samples
+                .iter()
+                .take(64)
+                .map(|sample| i64::from(*sample).pow(2))
+                .sum::<i64>()
+        };
+        let total_energy = |samples: &[i16]| {
+            samples
+                .iter()
+                .map(|sample| i64::from(*sample).pow(2))
+                .sum::<i64>()
+        };
+        let early_share =
+            |samples: &[i16]| early_energy(samples) as f64 / total_energy(samples).max(1) as f64;
+
+        let thock_early_share = early_share(&thock);
+        let click_early_share = early_share(&click);
+        let linear_early_share = early_share(&linear);
+        assert!(
+            click_early_share > thock_early_share * 1.4,
+            "click attack share {click_early_share:.3} must exceed thock {thock_early_share:.3}"
+        );
+        assert!(
+            linear_early_share > thock_early_share * 1.35,
+            "linear attack share {linear_early_share:.3} must exceed thock {thock_early_share:.3}"
+        );
     }
 
     #[test]

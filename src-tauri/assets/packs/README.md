@@ -17,10 +17,10 @@ zero, and performs no network access. It is a developer example only: neither
 
 ## Identities and contents
 
-- `keyforge-mechanical` — Classic Mechanical, version `1.1.0`
-- `keyforge-deep-thock` — Deep Thock, version `1.0.0`
-- `keyforge-crisp-click` — Crisp Click, version `1.0.0`
-- `keyforge-soft-linear` — Soft Linear, version `1.0.0`
+- `keyforge-mechanical` — Classic Mechanical, version `1.2.0`
+- `keyforge-deep-thock` — Deep Thock, version `1.1.0`
+- `keyforge-crisp-click` — Crisp Click, version `1.1.0`
+- `keyforge-soft-linear` — Soft Linear, version `1.1.0`
 
 Each archive contains:
 - `manifest.json`
@@ -56,8 +56,8 @@ semantics, so it never replaces an existing file. Its successful stdout is
 only that relative path. The expected SHA-256 digests are:
 
 ```text
-2bd991b0c9c9ad82e5821a7e4aa9576c35517ac733b59c271ebe5a9ddc0854bd  keyforge-crisp-click.zip
-c801bbf63c34338b6edffa0d092b3e13ce4fc8b69d68ead61661559553aa056a  keyforge-deep-thock.zip
-687f25f51fe0e454e1b53aaa53045be2493de8483d6c0e2664a3589ec5f304dd  keyforge-mechanical.zip
-7431c8385d684d5dfe09f6c2537d12856cd9c3ab15611c6be0695ffc01c01d13  keyforge-soft-linear.zip
+ae0cc32f351a74710c2997631345302de6acc39c48ee5bed542d159bcf6fc03b  keyforge-crisp-click.zip
+85e43e45b9fc474b6b84e838caeb41756e81962340e1e7ecb32cc2c4152214e8  keyforge-deep-thock.zip
+13c748a8d48ff1a68dbd87b32918f68c685c3cbfffd967d94b079cf6f0e0b919  keyforge-mechanical.zip
+add443b9e681d925860976b1ac1e2be98f0c1861adcedd309deef4b18f330fda  keyforge-soft-linear.zip
 ```
