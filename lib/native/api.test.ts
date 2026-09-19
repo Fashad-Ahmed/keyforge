@@ -83,4 +83,24 @@ describe("runtime controls", () => {
       volume: 0.25,
     });
   });
+
+  it("opens the native sound-pack importer without accepting a path", async () => {
+    invokeMock.mockResolvedValue({ status: "cancelled" });
+
+    const { importSoundPack } = await import("./api");
+
+    await expect(importSoundPack()).resolves.toEqual({ status: "cancelled" });
+    expect(invokeMock).toHaveBeenCalledWith("import_sound_pack");
+  });
+
+  it("selects a pack by sanitized id", async () => {
+    invokeMock.mockResolvedValue({ packId: "quiet-linear" });
+
+    const { selectSoundPack } = await import("./api");
+
+    await selectSoundPack("quiet-linear");
+    expect(invokeMock).toHaveBeenCalledWith("select_sound_pack", {
+      packId: "quiet-linear",
+    });
+  });
 });

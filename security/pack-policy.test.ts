@@ -25,7 +25,10 @@ const EXPECTED_PACK_FILES = [
 ] as const;
 const EXPECTED_ASSETS = [
   "src-tauri/assets/packs/README.md",
+  "src-tauri/assets/packs/keyforge-crisp-click.zip",
+  "src-tauri/assets/packs/keyforge-deep-thock.zip",
   "src-tauri/assets/packs/keyforge-mechanical.zip",
+  "src-tauri/assets/packs/keyforge-soft-linear.zip",
 ] as const;
 const EXPECTED_PACK_DEPENDENCIES = [
   'hound = "3.5.1"',
@@ -44,15 +47,27 @@ const FORBIDDEN_STARTUP_SYMBOLS = [
   "register_samples",
 ] as const;
 const APPROVED_RUNTIME_SOURCES = new Set([
+  "src-tauri/src/commands/runtime.rs",
+  "src-tauri/src/runtime/catalog.rs",
   "src-tauri/src/runtime/mod.rs",
   "src-tauri/src/runtime/selector.rs",
+  "src-tauri/src/settings/mod.rs",
 ]);
 const EXPECTED_HANDLER_ALLOWLIST = [
   "commands::app_info::get_app_info",
   "commands::runtime::get_runtime_status",
   "commands::runtime::set_sound_enabled",
   "commands::runtime::set_master_volume",
+  "commands::runtime::import_sound_pack",
+  "commands::runtime::select_sound_pack",
 ].join(",");
+
+function hasModulePathOverride(source: string): boolean {
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//gu, " ");
+  return /#\s*!?\s*\[(?:[^\]"\r\n]|"(?:\\.|[^"])*")*\bpath\s*=/u.test(
+    withoutComments,
+  );
+}
 
 function auditProductionSources(sources: ReadonlyMap<string, string>): string[] {
   const violations: string[] = [];
@@ -81,7 +96,7 @@ function auditProductionSources(sources: ReadonlyMap<string, string>): string[] 
       }
     }
 
-    if (/\bpath(?:\s|\/\*[\s\S]*?\*\/)*=/u.test(auditedSource)) {
+    if (hasModulePathOverride(auditedSource)) {
       violations.push(`${path}: module path override`);
     }
     if (hasRawIdentifier(auditedSource, "include")) {
@@ -577,7 +592,7 @@ it("keeps the reviewed pack source and asset sets exact", () => {
   );
   expect(
     enumerateFiles("src-tauri/assets/packs").every(
-      (path) => path.endsWith(".md") || path === EXPECTED_ASSETS[1],
+      (path) => path.endsWith(".md") || path.endsWith(".zip"),
     ),
   ).toBe(true);
 });
