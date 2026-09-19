@@ -152,6 +152,11 @@ input[type="range"]:focus-visible { outline: 2px solid var(--mint); outline-offs
 .import-button:active, .select-button:active { transform: translateY(1px) scale(0.985); }
 button:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
 button:disabled { cursor: wait; opacity: 0.55; transform: none; }
+.library-filters { display: flex; gap: 0.4rem; padding: 0 0 0.85rem; overflow-x: auto; scrollbar-width: none; }
+.library-filters::-webkit-scrollbar { display: none; }
+.filter-button { flex: 0 0 auto; min-height: 30px; padding: 0 0.68rem; border: 1px solid var(--line); border-radius: 0.45rem; background: rgba(7, 16, 17, 0.45); color: var(--muted); cursor: pointer; font-size: 0.65rem; font-weight: 620; letter-spacing: 0.015em; transition: border-color 140ms ease, background 140ms ease, color 140ms ease; }
+.filter-button:hover { border-color: var(--line-strong); color: var(--text); }
+.filter-button[aria-pressed="true"] { border-color: rgba(88, 223, 190, 0.52); background: rgba(31, 91, 77, 0.34); color: var(--mint); }
 .pack-list { border-top: 1px solid var(--line); }
 .pack-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 0.85rem; min-height: 61px; border-bottom: 1px solid var(--line); }
 .pack-row:last-child { border-bottom: 0; }
