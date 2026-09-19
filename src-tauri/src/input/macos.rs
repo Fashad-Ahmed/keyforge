@@ -20,7 +20,7 @@ type CGEventTapCallBack =
 
 const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
+const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
 const K_CG_EVENT_KEY_DOWN: u32 = 10;
 const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 
@@ -36,6 +36,8 @@ extern "C" {
     ) -> CFMachPortRef;
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -78,6 +80,10 @@ impl Drop for InputListener {
 }
 
 pub(crate) fn start_listener(sink: SoundEventSink) -> Result<InputListener, InputError> {
+    let trusted = unsafe { CGPreflightListenEventAccess() || CGRequestListenEventAccess() };
+    if !trusted {
+        return Err(InputError::PermissionDenied);
+    }
     let run_loop = Arc::new(Mutex::new(None));
     let thread_run_loop = run_loop.clone();
     let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
@@ -91,7 +97,7 @@ pub(crate) fn start_listener(sink: SoundEventSink) -> Result<InputListener, Inpu
                 CGEventTapCreate(
                     K_CG_SESSION_EVENT_TAP,
                     K_CG_HEAD_INSERT_EVENT_TAP,
-                    K_CG_EVENT_TAP_OPTION_DEFAULT,
+                    K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
                     1_u64 << K_CG_EVENT_KEY_DOWN,
                     event_tap_callback,
                     sink_pointer,
@@ -190,6 +196,7 @@ mod tests {
 
     #[test]
     fn classifies_raw_macos_codes_inside_adapter_only() {
+        assert_eq!(K_CG_EVENT_TAP_OPTION_LISTEN_ONLY, 1);
         assert_eq!(classify_macos_key_code(49), Some(SoundEvent::Space));
         assert_eq!(classify_macos_key_code(36), Some(SoundEvent::Enter));
         assert_eq!(classify_macos_key_code(51), Some(SoundEvent::Backspace));

@@ -1,3 +1,8 @@
+use crate::{
+    runtime::catalog::PackSummary,
+    settings::{SettingsValidationError, ValidatedVolume},
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RuntimeAudioStatus {
@@ -54,6 +59,7 @@ pub(crate) struct RuntimeSnapshot {
     pub(crate) input_status: RuntimeInputStatus,
     pub(crate) pack_id: String,
     pub(crate) pack_name: String,
+    pub(crate) packs: Vec<PackSummary>,
     pub(crate) sound_enabled: bool,
     pub(crate) volume: f32,
 }
@@ -74,9 +80,15 @@ impl RuntimeSnapshot {
             input_status,
             pack_id,
             pack_name,
+            packs: Vec::new(),
             sound_enabled,
             volume: volume.get(),
         }
+    }
+
+    pub(crate) fn with_packs(mut self, packs: Vec<PackSummary>) -> Self {
+        self.packs = packs;
+        self
     }
 
     #[cfg(test)]
@@ -90,23 +102,13 @@ impl RuntimeSnapshot {
             true,
             ValidatedVolume::new(1.0).unwrap(),
         )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ValidatedVolume(f32);
-
-impl ValidatedVolume {
-    pub(crate) fn new(volume: f32) -> Result<Self, RuntimeControlError> {
-        if volume.is_finite() && (0.0..=1.0).contains(&volume) {
-            Ok(Self(volume))
-        } else {
-            Err(RuntimeControlError::InvalidVolume)
-        }
-    }
-
-    pub(crate) fn get(self) -> f32 {
-        self.0
+        .with_packs(vec![PackSummary::new(
+            "keyforge-mechanical",
+            "KeyForge Mechanical",
+            true,
+            true,
+            RuntimeGroupCounts::new(3, 1, 1, 1, 1),
+        )])
     }
 }
 
@@ -115,6 +117,34 @@ impl ValidatedVolume {
 pub(crate) enum RuntimeControlError {
     InvalidVolume,
     AudioUnavailable,
+    PersistenceFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PackActionError {
+    NotFound,
+    ActivationFailed,
+    PersistenceFailed,
+    DuplicatePack,
+    InvalidPack,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "status", content = "snapshot", rename_all = "snake_case")]
+pub(crate) enum ImportOutcome {
+    Cancelled,
+    Installed(RuntimeSnapshot),
+}
+
+impl From<SettingsValidationError> for RuntimeControlError {
+    fn from(error: SettingsValidationError) -> Self {
+        match error {
+            SettingsValidationError::InvalidVolume | SettingsValidationError::InvalidPackId => {
+                Self::InvalidVolume
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +169,7 @@ mod tests {
                 "inputStatus",
                 "packId",
                 "packName",
+                "packs",
                 "soundEnabled",
                 "volume",
             ]
@@ -148,15 +179,15 @@ mod tests {
     #[test]
     fn rejects_invalid_volume() {
         assert_eq!(
-            ValidatedVolume::new(-0.1),
+            ValidatedVolume::new(-0.1).map_err(RuntimeControlError::from),
             Err(RuntimeControlError::InvalidVolume)
         );
         assert_eq!(
-            ValidatedVolume::new(1.1),
+            ValidatedVolume::new(1.1).map_err(RuntimeControlError::from),
             Err(RuntimeControlError::InvalidVolume)
         );
         assert_eq!(
-            ValidatedVolume::new(f32::NAN),
+            ValidatedVolume::new(f32::NAN).map_err(RuntimeControlError::from),
             Err(RuntimeControlError::InvalidVolume)
         );
         assert!(ValidatedVolume::new(0.5).is_ok());

@@ -101,7 +101,7 @@ const REVIEWED_WORKFLOW_LINES = [
 
 const PROJECT_ROOT = process.cwd();
 const ALLOWED_HANDLER =
-  "tauri::generate_handler![commands::app_info::get_app_info,commands::runtime::get_runtime_status,commands::runtime::set_sound_enabled,commands::runtime::set_master_volume]";
+  "tauri::generate_handler![commands::app_info::get_app_info,commands::runtime::get_runtime_status,commands::runtime::set_sound_enabled,commands::runtime::set_master_volume,commands::runtime::import_sound_pack,commands::runtime::select_sound_pack]";
 const ALLOWED_ACTIONS = [
   "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
   "pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa",
@@ -181,6 +181,19 @@ const APPROVED_DEPENDENCIES = [
     rename: null,
     source: CRATES_IO_SOURCE,
     req: "^2.11.3",
+    kind: null,
+    optional: false,
+    uses_default_features: true,
+    features: ["tray-icon"],
+    target: null,
+    registry: null,
+    path: null,
+  },
+  {
+    name: "tauri-plugin-dialog",
+    rename: null,
+    source: CRATES_IO_SOURCE,
+    req: "=2.6.0",
     kind: null,
     optional: false,
     uses_default_features: true,
@@ -1121,13 +1134,15 @@ it("rejects quoted escaped job permissions that the former reader ignored", () =
   expect(() => assertWorkflowPolicy(workflow)).toThrow();
 });
 
-it("documents M4 startup and later ownership exclusions", () => {
+it("documents current startup and product boundary exclusions", () => {
   const readme = read("README.md");
   expect(readme).toContain(
     "The audio engine and pack manager are constructed by Rust during ordinary Tauri startup.",
   );
   expect(readme).toContain("raw key codes never cross the adapter boundary");
-  expect(readme).toContain("There is no sound-pack IPC and no application networking.");
-  expect(readme).toContain("Milestone 5 owns Windows/Linux input adapters.");
-  expect(readme).toContain("Milestone 6 owns persistent volume and expanded product UI.");
+  expect(readme).toContain("Import uses a Rust-only native file picker.");
+  expect(readme).toContain("Sound enabled, master volume, and selected pack ID");
+  expect(readme).toContain(
+    "Autostart, networking, updates, and Windows/Linux input hooks remain excluded.",
+  );
 });

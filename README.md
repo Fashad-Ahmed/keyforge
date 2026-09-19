@@ -2,26 +2,28 @@
 
 KeyForge is a free, open-source, privacy-first keyboard sound engine for macOS, Windows, and Linux.
 
-This repository currently contains Milestone 4: a secure Tauri 2 desktop foundation, a statically exported Next.js presentation layer, a native Rust audio engine, a native sound-pack importer, and first local key-sound playback on macOS. Autostart, updates, custom pack import UI, community features, and application networking are intentionally not implemented yet.
+This repository currently contains Milestone 6: a secure Tauri 2 desktop foundation, a statically exported Next.js presentation layer, a native Rust audio engine, validated local sound-pack import, persistent controls, a product interface, and close-to-tray operation. macOS local key-sound playback is available; Windows and Linux input adapters remain explicitly unsupported.
 
 ## Architecture
 
 - Next.js and TypeScript render the interface as static files in `out/`.
 - Tauri loads those files directly; there is no production Next.js server.
 - Native functionality belongs in Rust and crosses IPC only through explicitly registered commands.
-- Custom commands are limited to reviewed coarse status and control IPC: `get_app_info`, `get_runtime_status`, `set_sound_enabled`, and `set_master_volume`.
+- Custom commands are limited to reviewed coarse status and control IPC: `get_app_info`, `get_runtime_status`, `set_sound_enabled`, `set_master_volume`, `import_sound_pack`, and `select_sound_pack`.
 - The main window has no built-in Tauri core permissions.
 - The audio engine accepts validated, decoded PCM only; encoded audio bytes and file paths are outside its boundary.
-- Its fixed mixer supports 32 simultaneous voices, and master volume is validated and held only in memory.
+- Its fixed mixer supports 32 simultaneous voices. Sound enabled, master volume, and selected pack ID are the only persisted product settings.
 - The audio engine and pack manager are constructed by Rust during ordinary Tauri startup.
 - The macOS input adapter converts native key-down events into internal `SoundEvent` categories only; raw key codes never cross the adapter boundary.
 - Windows and Linux input adapters return unsupported status in this milestone.
 - Sound packs contain data only: one strict JSON manifest and signed-16 PCM WAV files for normal, Space, Enter, Backspace, and Modifier groups.
 - Imports enforce a 16 MiB compressed archive limit, reject cross-platform traversal, decode before same-parent staging, and reject duplicate pack IDs without replacement.
 - Installed audio is rewritten as canonical signed-16 PCM WAV; the audio registry receives decoded PCM only.
-- There is no sound-pack IPC and no application networking.
-- Milestone 5 owns Windows/Linux input adapters.
-- Milestone 6 owns persistent volume and expanded product UI.
+- Import uses a Rust-only native file picker. The selected filesystem path stays in Rust and never crosses IPC.
+- Pack changes use prepare-then-commit activation: complete decode and registration precede one authoritative runtime swap, so a failed activation leaves the current sound active.
+- Closing the main window uses close-to-tray behavior. The native tray can enable or disable sounds, show KeyForge, or quit.
+- IPC errors are sanitized failures with stable variants rather than filesystem paths, decoder details, or operating-system errors.
+- There is no application networking. Autostart, networking, updates, and Windows/Linux input hooks remain excluded.
 - The application contains no telemetry, analytics, accounts, or runtime networking.
 
 See [the trust-boundary documentation](docs/architecture/trust-boundaries.md) and [threat model](docs/security/threat-model.md) before adding native functionality.
@@ -43,6 +45,8 @@ pnpm tauri dev
 ```
 
 The development asset server is restricted to `127.0.0.1`. Next.js telemetry is disabled by the committed project environment.
+
+Use **Import local pack** to open the native ZIP picker. Import cancellation is harmless; valid packs are installed and activated locally. The main Tauri capability list remains empty because the picker is invoked by Rust rather than exposed as a frontend plugin API.
 
 On macOS, local key-sound playback uses the operating system input monitoring/accessibility prompt. KeyForge does not store, transmit, log, or send raw key data to the frontend; the native adapter keeps raw key codes inside Rust and forwards only coarse sound categories internally.
 

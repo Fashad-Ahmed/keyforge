@@ -33,7 +33,21 @@ it("uses the same IPv4 loopback origin across development tooling", async () => 
   ) as TauriConfig;
   const nextConfig = (await import("../next.config")).default;
 
-  expect(packageJson.scripts.dev).toContain("--hostname 127.0.0.1");
-  expect(tauriConfig.build.devUrl).toBe("http://127.0.0.1:3000");
-  expect(nextConfig.assetPrefix).toBe("http://127.0.0.1:3000");
+  expect(packageJson.scripts.dev).toContain("--hostname 127.0.0.1 --port 1420");
+  expect(tauriConfig.build.devUrl).toBe("http://127.0.0.1:1420");
+  expect(nextConfig.assetPrefix).toBe("http://127.0.0.1:1420");
+});
+
+it("scopes platform-specific settings imports to their target operating systems", () => {
+  const storage = readFileSync(
+    resolve(process.cwd(), "src-tauri/src/settings/storage.rs"),
+    "utf8",
+  );
+  const settings = readFileSync(
+    resolve(process.cwd(), "src-tauri/src/settings/mod.rs"),
+    "utf8",
+  );
+
+  expect(storage).toMatch(/#\[cfg\(not\(windows\)\)\]\s+use std::fs;/u);
+  expect(settings).toMatch(/#\[cfg\(unix\)\]\s+use std::fs::File;/u);
 });

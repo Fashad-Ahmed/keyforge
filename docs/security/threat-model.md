@@ -47,5 +47,12 @@
 - the bundled pack enters through the same validator and storage transaction as imported packs
 - the audio registry receives decoded PCM only and returns opaque sample IDs
 - no sound-pack IPC and no application networking
+- sound enabled, master volume, and selected pack ID are the only persisted settings, stored as strict versioned JSON with atomic replacement
+- a Rust-only native file picker prevents local paths from becoming frontend input or IPC data
+- prepare-then-commit activation preserves the active selector until complete candidate decode and registration succeeds
+- sanitized failures omit paths, decoder internals, device details, and source errors
+- close-to-tray behavior and its Enable or Disable, Show, and Quit actions remain in Rust without extra frontend capabilities
 
 The current storage transaction serializes one manager process. Hostile same-user filesystem races across separate processes are outside this milestone and remain deferred to the production single-instance lifecycle. Later milestones must add dependency review automation, SBOM, provenance, artifact scanning, and signing.
+
+Autostart, networking, updates, and Windows/Linux input hooks remain excluded.
