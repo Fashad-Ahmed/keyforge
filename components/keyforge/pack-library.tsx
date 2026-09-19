@@ -33,6 +33,11 @@ export function PackLibrary({ packs, pendingAction, onImport, onSelect }: PackLi
         ))}
       </div>
       <div className="pack-list">
+        {visiblePacks.length === 0 ? (
+          <p className="pack-empty" role="status">
+            No {collection} instruments installed.
+          </p>
+        ) : null}
         {visiblePacks.map((pack, index) => (
           <article className="pack-row" key={pack.id}>
             <span className="pack-index">{String(index + 1).padStart(2, "0")}</span>

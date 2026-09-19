@@ -47,3 +47,18 @@ it("filters the installed library by approved sound collection", () => {
   fireEvent.click(screen.getByRole("button", { name: "All" }));
   expect(screen.getAllByRole("article")).toHaveLength(4);
 });
+
+it("explains when the selected collection has no instruments", () => {
+  render(
+    <PackLibrary
+      onImport={vi.fn()}
+      onSelect={vi.fn()}
+      packs={[pack("keyforge-mechanical", "Classic Mechanical")]}
+      pendingAction={null}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Imported" }));
+
+  expect(screen.getByRole("status")).toHaveTextContent("No imported instruments installed.");
+});
