@@ -27,7 +27,7 @@ struct Profile {
     body_decay_power: u32,
 }
 
-const PROFILES: [Profile; 4] = [
+const PROFILES: [Profile; 16] = [
     Profile {
         id: "keyforge-mechanical",
         name: "Classic Mechanical",
@@ -75,6 +75,150 @@ const PROFILES: [Profile; 4] = [
         body_smoothing: 42_000,
         duration_scale: 23_593,
         body_decay_power: 3,
+    },
+    Profile {
+        id: "keyforge-creamy-tactile",
+        name: "Creamy Tactile",
+        version: "1.0.0",
+        seed_mask: 0x31d7_80a5,
+        contact_gain: 8_000,
+        body_gain: 30_500,
+        shell_gain: 14_200,
+        body_smoothing: 48_000,
+        duration_scale: 38_200,
+        body_decay_power: 2,
+    },
+    Profile {
+        id: "keyforge-silent-mechanical",
+        name: "Silent Mechanical",
+        version: "1.0.0",
+        seed_mask: 0x7b14_c269,
+        contact_gain: 6_400,
+        body_gain: 8_800,
+        shell_gain: 3_800,
+        body_smoothing: 58_000,
+        duration_scale: 14_000,
+        body_decay_power: 4,
+    },
+    Profile {
+        id: "keyforge-buckling-spring",
+        name: "Buckling Spring",
+        version: "1.0.0",
+        seed_mask: 0xbe62_39f1,
+        contact_gain: 31_000,
+        body_gain: 24_500,
+        shell_gain: 32_767,
+        body_smoothing: 11_000,
+        duration_scale: 60_000,
+        body_decay_power: 1,
+    },
+    Profile {
+        id: "keyforge-vintage-typewriter",
+        name: "Vintage Typewriter",
+        version: "1.0.0",
+        seed_mask: 0xe047_15bc,
+        contact_gain: 32_767,
+        body_gain: 20_500,
+        shell_gain: 31_500,
+        body_smoothing: 15_500,
+        duration_scale: 75_000,
+        body_decay_power: 2,
+    },
+    Profile {
+        id: "keyforge-marble-thock",
+        name: "Marble Thock",
+        version: "1.0.0",
+        seed_mask: 0x94a8_5ed3,
+        contact_gain: 14_800,
+        body_gain: 32_767,
+        shell_gain: 10_500,
+        body_smoothing: 62_000,
+        duration_scale: 52_000,
+        body_decay_power: 1,
+    },
+    Profile {
+        id: "keyforge-poppy-tactile",
+        name: "Poppy Tactile",
+        version: "1.0.0",
+        seed_mask: 0x1f83_d942,
+        contact_gain: 20_000,
+        body_gain: 24_000,
+        shell_gain: 18_500,
+        body_smoothing: 21_000,
+        duration_scale: 24_500,
+        body_decay_power: 1,
+    },
+    Profile {
+        id: "keyforge-clacky-aluminum",
+        name: "Clacky Aluminum",
+        version: "1.0.0",
+        seed_mask: 0x56cb_270e,
+        contact_gain: 29_500,
+        body_gain: 19_000,
+        shell_gain: 32_767,
+        body_smoothing: 10_500,
+        duration_scale: 41_000,
+        body_decay_power: 2,
+    },
+    Profile {
+        id: "keyforge-dampened-polycarbonate",
+        name: "Dampened Polycarbonate",
+        version: "1.0.0",
+        seed_mask: 0xc218_74a9,
+        contact_gain: 12_500,
+        body_gain: 23_500,
+        shell_gain: 7_200,
+        body_smoothing: 54_000,
+        duration_scale: 30_000,
+        body_decay_power: 8,
+    },
+    Profile {
+        id: "keyforge-retro-terminal",
+        name: "Retro Terminal",
+        version: "1.0.0",
+        seed_mask: 0x0ad5_b631,
+        contact_gain: 27_500,
+        body_gain: 13_000,
+        shell_gain: 20_500,
+        body_smoothing: 17_500,
+        duration_scale: 21_500,
+        body_decay_power: 4,
+    },
+    Profile {
+        id: "keyforge-arcade",
+        name: "Arcade",
+        version: "1.0.0",
+        seed_mask: 0xf463_1b87,
+        contact_gain: 32_767,
+        body_gain: 21_000,
+        shell_gain: 27_500,
+        body_smoothing: 14_000,
+        duration_scale: 14_000,
+        body_decay_power: 1,
+    },
+    Profile {
+        id: "keyforge-soft-office",
+        name: "Soft Office",
+        version: "1.0.0",
+        seed_mask: 0x6e29_a4dc,
+        contact_gain: 7_800,
+        body_gain: 12_500,
+        shell_gain: 4_600,
+        body_smoothing: 60_000,
+        duration_scale: 19_000,
+        body_decay_power: 4,
+    },
+    Profile {
+        id: "keyforge-sci-fi-console",
+        name: "Sci-Fi Console",
+        version: "1.0.0",
+        seed_mask: 0xa70c_e358,
+        contact_gain: 12_000,
+        body_gain: 4_000,
+        shell_gain: 12_000,
+        body_smoothing: 9_000,
+        duration_scale: 18_000,
+        body_decay_power: 2,
     },
 ];
 
@@ -468,16 +612,51 @@ mod tests {
         "sounds/space-01.wav",
     ];
 
-    const COMMITTED_ARCHIVES: [&[u8]; 4] = [
+    const COMMITTED_ARCHIVES: [&[u8]; 16] = [
         include_bytes!("../assets/packs/keyforge-mechanical.zip"),
         include_bytes!("../assets/packs/keyforge-deep-thock.zip"),
         include_bytes!("../assets/packs/keyforge-crisp-click.zip"),
         include_bytes!("../assets/packs/keyforge-soft-linear.zip"),
+        include_bytes!("../assets/packs/keyforge-creamy-tactile.zip"),
+        include_bytes!("../assets/packs/keyforge-silent-mechanical.zip"),
+        include_bytes!("../assets/packs/keyforge-buckling-spring.zip"),
+        include_bytes!("../assets/packs/keyforge-vintage-typewriter.zip"),
+        include_bytes!("../assets/packs/keyforge-marble-thock.zip"),
+        include_bytes!("../assets/packs/keyforge-poppy-tactile.zip"),
+        include_bytes!("../assets/packs/keyforge-clacky-aluminum.zip"),
+        include_bytes!("../assets/packs/keyforge-dampened-polycarbonate.zip"),
+        include_bytes!("../assets/packs/keyforge-retro-terminal.zip"),
+        include_bytes!("../assets/packs/keyforge-arcade.zip"),
+        include_bytes!("../assets/packs/keyforge-soft-office.zip"),
+        include_bytes!("../assets/packs/keyforge-sci-fi-console.zip"),
     ];
 
     #[test]
-    fn generator_defines_four_distinct_mechanical_profiles() {
-        assert_eq!(PROFILES.len(), 4);
+    fn generator_defines_the_complete_distinct_sound_library() {
+        assert_eq!(
+            PROFILES
+                .into_iter()
+                .map(|profile| (profile.id, profile.name))
+                .collect::<Vec<_>>(),
+            vec![
+                ("keyforge-mechanical", "Classic Mechanical"),
+                ("keyforge-deep-thock", "Deep Thock"),
+                ("keyforge-crisp-click", "Crisp Click"),
+                ("keyforge-soft-linear", "Soft Linear"),
+                ("keyforge-creamy-tactile", "Creamy Tactile"),
+                ("keyforge-silent-mechanical", "Silent Mechanical"),
+                ("keyforge-buckling-spring", "Buckling Spring"),
+                ("keyforge-vintage-typewriter", "Vintage Typewriter"),
+                ("keyforge-marble-thock", "Marble Thock"),
+                ("keyforge-poppy-tactile", "Poppy Tactile"),
+                ("keyforge-clacky-aluminum", "Clacky Aluminum"),
+                ("keyforge-dampened-polycarbonate", "Dampened Polycarbonate"),
+                ("keyforge-retro-terminal", "Retro Terminal"),
+                ("keyforge-arcade", "Arcade"),
+                ("keyforge-soft-office", "Soft Office"),
+                ("keyforge-sci-fi-console", "Sci-Fi Console"),
+            ]
+        );
         let archives = PROFILES
             .into_iter()
             .map(|profile| generate_archive(profile).unwrap())
@@ -535,6 +714,96 @@ mod tests {
         assert!(
             linear_early_share > thock_early_share * 1.35,
             "linear attack share {linear_early_share:.3} must exceed thock {thock_early_share:.3}"
+        );
+    }
+
+    #[test]
+    fn every_profile_pair_has_a_distinct_perceptual_signature() {
+        let signatures = PROFILES
+            .into_iter()
+            .map(|profile| {
+                let mut attack_share = 0.0;
+                let mut crossing_rate = 0.0;
+                let mut roughness = 0.0;
+                let mut energy_centroid = 0.0;
+                for voice in VOICES {
+                    let samples = mechanical_sample(voice, profile);
+                    let total_energy = samples
+                        .iter()
+                        .map(|sample| i64::from(*sample).pow(2))
+                        .sum::<i64>()
+                        .max(1) as f64;
+                    let early_energy = samples
+                        .iter()
+                        .take(96)
+                        .map(|sample| i64::from(*sample).pow(2))
+                        .sum::<i64>() as f64;
+                    let crossings = samples
+                        .windows(2)
+                        .filter(|pair| pair[0].is_negative() != pair[1].is_negative())
+                        .count();
+                    let difference_energy = samples
+                        .windows(2)
+                        .map(|pair| i64::from(pair[1]) - i64::from(pair[0]))
+                        .map(|difference| difference.pow(2))
+                        .sum::<i64>() as f64;
+                    let centroid = samples
+                        .iter()
+                        .enumerate()
+                        .map(|(index, sample)| index as f64 * i64::from(*sample).pow(2) as f64)
+                        .sum::<f64>()
+                        / total_energy
+                        / samples.len() as f64;
+
+                    attack_share += early_energy / total_energy;
+                    crossing_rate += crossings as f64 / samples.len() as f64;
+                    roughness += difference_energy / total_energy;
+                    energy_centroid += centroid;
+                }
+                let voice_count = VOICES.len() as f64;
+                (
+                    profile.id,
+                    attack_share / voice_count,
+                    crossing_rate / voice_count,
+                    roughness / voice_count,
+                    energy_centroid / voice_count,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut overlaps = Vec::new();
+        for left in 0..signatures.len() {
+            for right in left + 1..signatures.len() {
+                let (left_id, left_attack, left_crossings, left_roughness, left_centroid) =
+                    signatures[left];
+                let (right_id, right_attack, right_crossings, right_roughness, right_centroid) =
+                    signatures[right];
+                let attack_distance = (left_attack - right_attack).abs() / 0.025;
+                let centroid_distance = (left_centroid - right_centroid).abs() / 0.02;
+                let crossing_distance = (left_crossings - right_crossings).abs() / 0.015;
+                let roughness_distance = (left_roughness - right_roughness).abs() / 0.08;
+                let perceptual_distance = (attack_distance.powi(2)
+                    + centroid_distance.powi(2)
+                    + crossing_distance.powi(2)
+                    + roughness_distance.powi(2))
+                .sqrt();
+                let separated = perceptual_distance >= 1.0;
+
+                if !separated {
+                    overlaps.push(format!(
+                        "{left_id} and {right_id}: attack delta {:.3}, centroid delta {:.3}, crossing delta {:.3}, roughness delta {:.3}",
+                        (left_attack - right_attack).abs(),
+                        (left_centroid - right_centroid).abs(),
+                        (left_crossings - right_crossings).abs(),
+                        (left_roughness - right_roughness).abs(),
+                    ));
+                }
+            }
+        }
+        assert!(
+            overlaps.is_empty(),
+            "profiles are too similar:\n{}",
+            overlaps.join("\n")
         );
     }
 

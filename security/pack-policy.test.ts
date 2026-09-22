@@ -25,10 +25,43 @@ const EXPECTED_PACK_FILES = [
 ] as const;
 const EXPECTED_ASSETS = [
   "src-tauri/assets/packs/README.md",
+  "src-tauri/assets/packs/keyforge-arcade.zip",
+  "src-tauri/assets/packs/keyforge-buckling-spring.zip",
+  "src-tauri/assets/packs/keyforge-clacky-aluminum.zip",
   "src-tauri/assets/packs/keyforge-crisp-click.zip",
+  "src-tauri/assets/packs/keyforge-creamy-tactile.zip",
+  "src-tauri/assets/packs/keyforge-dampened-polycarbonate.zip",
   "src-tauri/assets/packs/keyforge-deep-thock.zip",
+  "src-tauri/assets/packs/keyforge-marble-thock.zip",
   "src-tauri/assets/packs/keyforge-mechanical.zip",
+  "src-tauri/assets/packs/keyforge-poppy-tactile.zip",
+  "src-tauri/assets/packs/keyforge-retro-terminal.zip",
+  "src-tauri/assets/packs/keyforge-sci-fi-console.zip",
+  "src-tauri/assets/packs/keyforge-silent-mechanical.zip",
   "src-tauri/assets/packs/keyforge-soft-linear.zip",
+  "src-tauri/assets/packs/keyforge-soft-office.zip",
+  "src-tauri/assets/packs/keyforge-vintage-typewriter.zip",
+  "src-tauri/assets/packs/keyforge-switch-linear.zip",
+  "src-tauri/assets/packs/keyforge-switch-tactile.zip",
+  "src-tauri/assets/packs/keyforge-switch-clicky.zip",
+  "src-tauri/assets/packs/keyforge-playful-bubble.zip",
+  "src-tauri/assets/packs/keyforge-playful-duck.zip",
+  "src-tauri/assets/packs/keyforge-playful-boing.zip",
+  "src-tauri/assets/packs/sources/bubble-pop.wav",
+  "src-tauri/assets/packs/sources/cartoon-boing.wav",
+  "src-tauri/assets/packs/sources/keychron-k10-keypress.wav",
+  "src-tauri/assets/packs/sources/keychron-linear-spacebar.wav",
+  "src-tauri/assets/packs/sources/rubber-duck.wav",
+  "src-tauri/assets/packs/sources/stav-clicky.wav",
+  "src-tauri/assets/packs/sources/stav-tactile.wav",
+] as const;
+const EXPECTED_SOUND_MANIFESTS = [
+  "src-tauri/assets/sound-manifests/keyforge-switch-linear.json",
+  "src-tauri/assets/sound-manifests/keyforge-switch-tactile.json",
+  "src-tauri/assets/sound-manifests/keyforge-switch-clicky.json",
+  "src-tauri/assets/sound-manifests/keyforge-playful-bubble.json",
+  "src-tauri/assets/sound-manifests/keyforge-playful-duck.json",
+  "src-tauri/assets/sound-manifests/keyforge-playful-boing.json",
 ] as const;
 const EXPECTED_PACK_DEPENDENCIES = [
   'hound = "3.5.1"',
@@ -591,8 +624,14 @@ it("keeps the reviewed pack source and asset sets exact", () => {
     [],
   );
   expect(
+    exactFileSetViolations(
+      enumerateFiles("src-tauri/assets/sound-manifests"),
+      EXPECTED_SOUND_MANIFESTS,
+    ),
+  ).toEqual([]);
+  expect(
     enumerateFiles("src-tauri/assets/packs").every(
-      (path) => path.endsWith(".md") || path.endsWith(".zip"),
+      (path) => path.endsWith(".md") || path.endsWith(".zip") || path.endsWith(".wav"),
     ),
   ).toBe(true);
 });

@@ -260,13 +260,13 @@ it("keeps the active instrument visible when catalog discovery is unavailable", 
   expect(screen.getByText("Active")).toBeInTheDocument();
 });
 
-it("identifies every built-in profile when catalog discovery is unavailable", async () => {
+it("identifies a sound-collection profile as built-in when catalog discovery is unavailable", async () => {
   getRuntimeStatusMock.mockResolvedValue({
     audioStatus: "ready",
     groupCounts: { normal: 3, space: 1, enter: 1, backspace: 1, modifier: 1 },
     inputStatus: "ready",
-    packId: "keyforge-deep-thock",
-    packName: "Deep Thock",
+    packId: "keyforge-arcade",
+    packName: "Arcade",
     packs: [],
     soundEnabled: true,
     volume: 0.78,

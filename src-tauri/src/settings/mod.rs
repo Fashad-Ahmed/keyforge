@@ -71,7 +71,7 @@ impl AppSettings {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self::new(true, 1.0, "keyforge-mechanical").expect("default settings are valid")
+        Self::new(true, 1.0, "keyforge-switch-linear").expect("default settings are valid")
     }
 }
 
@@ -282,6 +282,14 @@ mod tests {
 
         assert_eq!(loaded.health(), SettingsHealth::Defaulted);
         assert_eq!(loaded.settings(), &AppSettings::default());
+    }
+
+    #[test]
+    fn first_launch_defaults_to_the_real_recorded_mechanical_pack() {
+        assert_eq!(
+            AppSettings::default().selected_pack_id().as_str(),
+            "keyforge-switch-linear"
+        );
     }
 
     #[test]

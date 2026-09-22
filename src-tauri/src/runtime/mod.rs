@@ -56,9 +56,9 @@ impl KeyForgeRuntime {
             inner: Arc::new(Mutex::new(RuntimeInner {
                 sound_enabled: true,
                 volume: ValidatedVolume::new(1.0).expect("default volume is valid"),
-                pack_id: "keyforge-mechanical".to_string(),
-                pack_name: "KeyForge Mechanical".to_string(),
-                group_counts: RuntimeGroupCounts::new(3, 1, 1, 1, 1),
+                pack_id: "keyforge-switch-linear".to_string(),
+                pack_name: "Linear Switch (Keychron K10)".to_string(),
+                group_counts: RuntimeGroupCounts::new(1, 1, 1, 1, 1),
                 selector: None,
             })),
             input_status: RuntimeInputStatus::Unavailable,
@@ -92,7 +92,7 @@ impl KeyForgeRuntime {
             .install_bundled_profiles()
             .map_err(|_| RuntimeStartError::Pack)?
             .into_iter()
-            .find(|pack| pack.id().as_str() == "keyforge-mechanical")
+            .find(|pack| pack.id().as_str() == "keyforge-switch-linear")
             .ok_or(RuntimeStartError::Pack)?;
         let selected = manager
             .discover()
@@ -165,9 +165,9 @@ impl KeyForgeRuntime {
             inner: Arc::new(Mutex::new(RuntimeInner {
                 sound_enabled: true,
                 volume: ValidatedVolume::new(1.0).unwrap(),
-                pack_id: "keyforge-mechanical".to_string(),
-                pack_name: "KeyForge Mechanical".to_string(),
-                group_counts: RuntimeGroupCounts::new(3, 1, 1, 1, 1),
+                pack_id: "keyforge-switch-linear".to_string(),
+                pack_name: "Linear Switch (Keychron K10)".to_string(),
+                group_counts: RuntimeGroupCounts::new(1, 1, 1, 1, 1),
                 selector: None,
             })),
             input_status: RuntimeInputStatus::Ready,
@@ -188,8 +188,8 @@ impl KeyForgeRuntime {
             inner: Arc::new(Mutex::new(RuntimeInner {
                 sound_enabled: true,
                 volume: ValidatedVolume::new(1.0).unwrap(),
-                pack_id: "keyforge-mechanical".to_string(),
-                pack_name: "KeyForge Mechanical".to_string(),
+                pack_id: "keyforge-switch-linear".to_string(),
+                pack_name: "Linear Switch (Keychron K10)".to_string(),
                 group_counts: RuntimeGroupCounts::new(1, 0, 0, 0, 0),
                 selector: Some(Arc::new(SoundSelector::from_groups_for_test(
                     normal,

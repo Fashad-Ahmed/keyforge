@@ -17,6 +17,10 @@ This repository currently contains Milestone 6: a secure Tauri 2 desktop foundat
 - The macOS input adapter converts native key-down events into internal `SoundEvent` categories only; raw key codes never cross the adapter boundary.
 - Windows and Linux input adapters return unsupported status in this milestone.
 - Sound packs contain data only: one strict JSON manifest and signed-16 PCM WAV files for normal, Space, Enter, Backspace, and Modifier groups.
+- The bundled library separates recorded linear/tactile/clicky mechanical sounds
+  from playful bubble-pop, rubber-duck, and cartoon-boing options; earlier
+  procedural sounds are labeled separately. All audio is bundled locally, and
+  new installs default to the recorded Keychron linear pack.
 - Imports enforce a 16 MiB compressed archive limit, reject cross-platform traversal, decode before same-parent staging, and reject duplicate pack IDs without replacement.
 - Installed audio is rewritten as canonical signed-16 PCM WAV; the audio registry receives decoded PCM only.
 - Import uses a Rust-only native file picker. The selected filesystem path stays in Rust and never crosses IPC.

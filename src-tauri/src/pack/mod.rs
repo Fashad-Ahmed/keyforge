@@ -34,17 +34,77 @@ pub(crate) use storage::{PackStorage, StoredDecodedPack, StoredPackMetadata};
 
 pub const MAX_DECODED_PACK_BYTES: usize = 64 * 1024 * 1024;
 
-const BUNDLED_DEFAULT_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-mechanical.zip");
+const BUNDLED_DEFAULT_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-switch-linear.zip");
+const BUNDLED_CLASSIC_MECHANICAL_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-mechanical.zip");
 const BUNDLED_DEEP_THOCK_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-deep-thock.zip");
 const BUNDLED_CRISP_CLICK_PACK: &[u8] =
     include_bytes!("../../assets/packs/keyforge-crisp-click.zip");
 const BUNDLED_SOFT_LINEAR_PACK: &[u8] =
     include_bytes!("../../assets/packs/keyforge-soft-linear.zip");
-const BUNDLED_PACKS: [(&str, &[u8]); 4] = [
-    ("keyforge-mechanical", BUNDLED_DEFAULT_PACK),
+const BUNDLED_CREAMY_TACTILE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-creamy-tactile.zip");
+const BUNDLED_SILENT_MECHANICAL_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-silent-mechanical.zip");
+const BUNDLED_BUCKLING_SPRING_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-buckling-spring.zip");
+const BUNDLED_VINTAGE_TYPEWRITER_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-vintage-typewriter.zip");
+const BUNDLED_MARBLE_THOCK_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-marble-thock.zip");
+const BUNDLED_POPPY_TACTILE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-poppy-tactile.zip");
+const BUNDLED_CLACKY_ALUMINUM_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-clacky-aluminum.zip");
+const BUNDLED_DAMPENED_POLYCARBONATE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-dampened-polycarbonate.zip");
+const BUNDLED_RETRO_TERMINAL_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-retro-terminal.zip");
+const BUNDLED_ARCADE_PACK: &[u8] = include_bytes!("../../assets/packs/keyforge-arcade.zip");
+const BUNDLED_SOFT_OFFICE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-soft-office.zip");
+const BUNDLED_SCI_FI_CONSOLE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-sci-fi-console.zip");
+const BUNDLED_SWITCH_LINEAR_PACK: &[u8] = BUNDLED_DEFAULT_PACK;
+const BUNDLED_SWITCH_TACTILE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-switch-tactile.zip");
+const BUNDLED_SWITCH_CLICKY_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-switch-clicky.zip");
+const BUNDLED_PLAYFUL_BUBBLE_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-playful-bubble.zip");
+const BUNDLED_PLAYFUL_DUCK_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-playful-duck.zip");
+const BUNDLED_PLAYFUL_BOING_PACK: &[u8] =
+    include_bytes!("../../assets/packs/keyforge-playful-boing.zip");
+const BUNDLED_PACKS: [(&str, &[u8]); 22] = [
+    ("keyforge-mechanical", BUNDLED_CLASSIC_MECHANICAL_PACK),
     ("keyforge-deep-thock", BUNDLED_DEEP_THOCK_PACK),
     ("keyforge-crisp-click", BUNDLED_CRISP_CLICK_PACK),
     ("keyforge-soft-linear", BUNDLED_SOFT_LINEAR_PACK),
+    ("keyforge-creamy-tactile", BUNDLED_CREAMY_TACTILE_PACK),
+    ("keyforge-silent-mechanical", BUNDLED_SILENT_MECHANICAL_PACK),
+    ("keyforge-buckling-spring", BUNDLED_BUCKLING_SPRING_PACK),
+    (
+        "keyforge-vintage-typewriter",
+        BUNDLED_VINTAGE_TYPEWRITER_PACK,
+    ),
+    ("keyforge-marble-thock", BUNDLED_MARBLE_THOCK_PACK),
+    ("keyforge-poppy-tactile", BUNDLED_POPPY_TACTILE_PACK),
+    ("keyforge-clacky-aluminum", BUNDLED_CLACKY_ALUMINUM_PACK),
+    (
+        "keyforge-dampened-polycarbonate",
+        BUNDLED_DAMPENED_POLYCARBONATE_PACK,
+    ),
+    ("keyforge-retro-terminal", BUNDLED_RETRO_TERMINAL_PACK),
+    ("keyforge-arcade", BUNDLED_ARCADE_PACK),
+    ("keyforge-soft-office", BUNDLED_SOFT_OFFICE_PACK),
+    ("keyforge-sci-fi-console", BUNDLED_SCI_FI_CONSOLE_PACK),
+    ("keyforge-switch-linear", BUNDLED_SWITCH_LINEAR_PACK),
+    ("keyforge-switch-tactile", BUNDLED_SWITCH_TACTILE_PACK),
+    ("keyforge-switch-clicky", BUNDLED_SWITCH_CLICKY_PACK),
+    ("keyforge-playful-bubble", BUNDLED_PLAYFUL_BUBBLE_PACK),
+    ("keyforge-playful-duck", BUNDLED_PLAYFUL_DUCK_PACK),
+    ("keyforge-playful-boing", BUNDLED_PLAYFUL_BOING_PACK),
 ];
 
 pub(crate) fn is_bundled_pack_id(id: &str) -> bool {
@@ -350,18 +410,23 @@ impl PackManager {
     pub fn install_bundled_profiles(&self) -> Result<Vec<InstalledPack>, PackInstallError> {
         let mut installed = Vec::with_capacity(BUNDLED_PACKS.len());
         for (expected_id, archive) in BUNDLED_PACKS {
-            match self.install_bundled(archive) {
-                Ok(pack) => installed.push(pack),
-                Err(PackInstallError::DuplicateId) => {
+            let expected = validate_archive(Cursor::new(archive), archive.len() as u64)?;
+            if expected.manifest().id().as_str() != expected_id {
+                return Err(PackInstallError::DuplicateId);
+            }
+            match self.storage.install_validated(expected.clone()) {
+                Ok(metadata) => installed.push(metadata.into()),
+                Err(PackStorageError::DuplicateId) => {
                     let existing = self
-                        .discover()
-                        .map_err(PackInstallError::from)?
-                        .into_iter()
-                        .find(|pack| pack.id().as_str() == expected_id)
-                        .ok_or(PackInstallError::DuplicateId)?;
-                    installed.push(existing);
+                        .storage
+                        .load_installed(expected.manifest().id())
+                        .map_err(PackInstallError::from)?;
+                    if !stored_pack_matches_validated(&existing, &expected) {
+                        return Err(PackInstallError::DuplicateId);
+                    }
+                    installed.push(existing.metadata.into());
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(installed)
@@ -396,6 +461,27 @@ impl PackManager {
     }
 }
 
+fn stored_pack_matches_validated(stored: &StoredDecodedPack, expected: &ValidatedPack) -> bool {
+    let manifest = expected.manifest();
+    let expected_counts = [
+        manifest.sounds().normal().len(),
+        manifest.sounds().space().len(),
+        manifest.sounds().enter().len(),
+        manifest.sounds().backspace().len(),
+        manifest.sounds().modifier().len(),
+    ];
+    stored.metadata.id == *manifest.id()
+        && stored.metadata.name == manifest.name()
+        && stored.metadata.pack_version == manifest.pack_version()
+        && stored.metadata.variant_counts == expected_counts
+        && stored.sounds.total_len() == expected.sounds().total_len()
+        && stored
+            .sounds
+            .iter()
+            .zip(expected.sounds().iter())
+            .all(|(actual, expected)| actual == expected.sample())
+}
+
 impl From<PackArchiveError> for PackInstallError {
     fn from(error: PackArchiveError) -> Self {
         Self::Archive(error)
@@ -426,9 +512,15 @@ impl From<PackStorageError> for PackInstallError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, panic::catch_unwind};
+    use std::{
+        fs,
+        io::{Cursor, Read},
+        panic::catch_unwind,
+    };
 
+    use super::BUNDLED_PACKS;
     use crate::audio::{AudioEngineHandle, PcmSample, RegisterSampleError, SampleId};
+    use zip::ZipArchive;
 
     use super::{
         archive::MAX_ARCHIVE_BYTES,
@@ -445,16 +537,17 @@ mod tests {
 
         let installed = manager.install_bundled_default().unwrap();
 
-        assert_eq!(installed.id().as_str(), "keyforge-mechanical");
-        assert_eq!(installed.pack_version().to_string(), "1.2.0");
-        assert_eq!(installed.variant_counts().normal(), 3);
+        assert_eq!(installed.id().as_str(), "keyforge-switch-linear");
+        assert_eq!(installed.name(), "Linear Switch (Keychron K10)");
+        assert_eq!(installed.pack_version().to_string(), "1.0.0");
+        assert_eq!(installed.variant_counts().normal(), 1);
         assert_eq!(installed.variant_counts().space(), 1);
         assert_eq!(installed.variant_counts().enter(), 1);
         assert_eq!(installed.variant_counts().backspace(), 1);
         assert_eq!(installed.variant_counts().modifier(), 1);
         let decoded = manager.decode(installed.id()).unwrap();
         assert_eq!(decoded.metadata(), &installed);
-        assert_eq!(decoded.metadata().variant_counts().total(), 7);
+        assert_eq!(decoded.metadata().variant_counts().total(), 5);
     }
 
     #[test]
@@ -475,9 +568,85 @@ mod tests {
                 ("keyforge-deep-thock", "Deep Thock"),
                 ("keyforge-crisp-click", "Crisp Click"),
                 ("keyforge-soft-linear", "Soft Linear"),
+                ("keyforge-creamy-tactile", "Creamy Tactile"),
+                ("keyforge-silent-mechanical", "Silent Mechanical"),
+                ("keyforge-buckling-spring", "Buckling Spring"),
+                ("keyforge-vintage-typewriter", "Vintage Typewriter"),
+                ("keyforge-marble-thock", "Marble Thock"),
+                ("keyforge-poppy-tactile", "Poppy Tactile"),
+                ("keyforge-clacky-aluminum", "Clacky Aluminum"),
+                ("keyforge-dampened-polycarbonate", "Dampened Polycarbonate",),
+                ("keyforge-retro-terminal", "Retro Terminal"),
+                ("keyforge-arcade", "Arcade"),
+                ("keyforge-soft-office", "Soft Office"),
+                ("keyforge-sci-fi-console", "Sci-Fi Console"),
+                ("keyforge-switch-linear", "Linear Switch (Keychron K10)"),
+                ("keyforge-switch-tactile", "Tactile Switch (StavSounds)"),
+                ("keyforge-switch-clicky", "Clicky Switch (StavSounds)"),
+                ("keyforge-playful-bubble", "Bubble Pop"),
+                ("keyforge-playful-duck", "Rubber Duck"),
+                ("keyforge-playful-boing", "Cartoon Boing"),
             ]
         );
-        assert_eq!(manager.discover().unwrap().len(), 4);
+        assert_eq!(manager.discover().unwrap().len(), 22);
+    }
+
+    #[test]
+    fn curated_recordings_are_real_distinct_audio_payloads() {
+        let curated_ids = [
+            "keyforge-switch-linear",
+            "keyforge-switch-tactile",
+            "keyforge-switch-clicky",
+            "keyforge-playful-bubble",
+            "keyforge-playful-duck",
+            "keyforge-playful-boing",
+        ];
+        let samples = curated_ids.map(|id| {
+            let (_, bytes) = BUNDLED_PACKS
+                .iter()
+                .find(|(bundled_id, _)| *bundled_id == id)
+                .unwrap();
+            let mut archive = ZipArchive::new(Cursor::new(*bytes)).unwrap();
+            let mut wav = Vec::new();
+            archive
+                .by_name("sounds/normal-01.wav")
+                .unwrap()
+                .read_to_end(&mut wav)
+                .unwrap();
+            assert_eq!(&wav[..4], b"RIFF");
+            assert_eq!(&wav[8..12], b"WAVE");
+            assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1);
+            assert_eq!(
+                u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+                48_000
+            );
+            wav
+        });
+
+        for left in 0..samples.len() {
+            for right in left + 1..samples.len() {
+                assert_ne!(
+                    samples[left], samples[right],
+                    "curated sounds must not be clones"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_profiles_reject_a_preexisting_pack_with_a_reserved_identity() {
+        let root = TestRoot::new();
+        let source = root.write_file(
+            "colliding-arcade.zip",
+            &valid_pack_zip_with_identity("keyforge-arcade", "Not the Bundled Arcade"),
+        );
+        let manager = PackManager::open(root.path().join("managed")).unwrap();
+        manager.install_zip(&source).unwrap();
+
+        assert_eq!(
+            manager.install_bundled_profiles(),
+            Err(PackInstallError::DuplicateId)
+        );
     }
 
     #[test]
