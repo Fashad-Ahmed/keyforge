@@ -1,7 +1,9 @@
-# Bundled KeyForge Mechanical Packs
+# Bundled KeyForge Sound Packs
 
-The sixteen `keyforge-*.zip` archives are original, data-only sound packs authored by
-KeyForge contributors and dedicated to the public domain under CC0-1.0.
+The original sixteen `keyforge-*.zip` archives are procedural, data-only sound
+packs authored by KeyForge contributors and dedicated to the public domain under
+CC0-1.0. They are synthesized keyboard-like effects, not recordings of real
+switches. The app calls this collection **Earlier synths** to make that clear.
 
 The WAV files are synthesized offline by
 `src-tauri/examples/generate_default_pack.rs`. The deterministic generator
@@ -14,6 +16,67 @@ floating-point or platform `libm` operation, produces mono signed 16-bit PCM at
 48,000 Hz, clamps every sample below 0.9 full scale, ends every WAV at exact
 zero, and performs no network access. It is a developer example only: neither
 `build.rs` nor production startup calls it.
+
+## Recorded and playful collections
+
+Six additional packs use distinct, locally bundled CC0 recordings: three
+mechanical-keyboard examples (linear, tactile, and clicky) and three playful
+effects (bubble pop, rubber duck, and cartoon boing). Each recording is included
+as plain mono 48 kHz signed-16 PCM WAV data. The Freesound preview rendition was
+used where the source download requires an account; it is not represented as a
+full-resolution studio master. The samples are packaged into the strict WAV-only
+sound-pack format and shipped with the app, so playback makes no network request.
+
+Credits and source licenses:
+
+- **Linear Switch (Keychron K10):** Normal letters use “Key_Press” by Mediasaur,
+  [Freesound #788932](https://freesound.org/people/Mediasaur/sounds/788932/), CC0.
+  Space uses “Keychron k10 space_bar” by Sadiquecat,
+  [Freesound #789630](https://freesound.org/people/Sadiquecat/sounds/789630/), CC0.
+- **Tactile Switch:** “Keyboard_Tactile_9” by StavSounds,
+  [Freesound #766640](https://freesound.org/people/StavSounds/sounds/766640/), CC0.
+- **Clicky Switch:** “Keyboard_Clicky_2” by StavSounds,
+  [Freesound #766617](https://freesound.org/people/StavSounds/sounds/766617/), CC0.
+- **Bubble Pop:** “Bubble_Pop” by arttim,
+  [Freesound #733264](https://freesound.org/people/arttim/sounds/733264/), CC0.
+- **Rubber Duck:** “Rubber Duck” by Slothfully_So,
+  [Freesound #685067](https://freesound.org/people/Slothfully_So/sounds/685067/), CC0.
+- **Cartoon Boing:** “Cartoon Boing.wav” by reelworldstudio,
+  [Freesound #161122](https://freesound.org/people/reelworldstudio/sounds/161122/), CC0.
+
+CC0 does not require credit; these courtesy credits preserve provenance for
+users and downstream pack makers. The source WAVs are retained in `sources/`.
+Each curated archive contains one `normal` voice and one voice for each special
+key group. The linear pack uses the separate real spacebar recording for Space;
+its other groups use the single-key Keychron press. Each other pack uses its
+named sound throughout. The pack loader still validates every archive and WAV
+using the same strict rules as imported packs.
+
+Curated identities:
+
+- `keyforge-switch-linear` — Linear Switch (Keychron K10), version `1.0.0`
+- `keyforge-switch-tactile` — Tactile Switch (StavSounds), version `1.0.0`
+- `keyforge-switch-clicky` — Clicky Switch (StavSounds), version `1.0.0`
+- `keyforge-playful-bubble` — Bubble Pop, version `1.0.0`
+- `keyforge-playful-duck` — Rubber Duck, version `1.0.0`
+- `keyforge-playful-boing` — Cartoon Boing, version `1.0.0`
+
+## Rebuild a curated archive
+
+The source WAVs, manifests, and deterministic Rust packager are all committed.
+From the repository root, choose a relative output path that does not exist:
+
+```sh
+cargo run --locked --manifest-path src-tauri/Cargo.toml \
+  --example generate_curated_packs -- keyforge-playful-bubble \
+  src-tauri/target/keyforge-playful-bubble.repro.zip
+cmp src-tauri/assets/packs/keyforge-playful-bubble.zip \
+  src-tauri/target/keyforge-playful-bubble.repro.zip
+```
+
+Replace `keyforge-playful-bubble` with any one of the six curated IDs above.
+The generator uses create-new output semantics, stores only manifest and WAV
+data, and never downloads or transforms audio at runtime.
 
 ## Identities and contents
 
@@ -34,7 +97,7 @@ zero, and performs no network access. It is a developer example only: neither
 - `keyforge-soft-office` — Soft Office, version `1.0.0`
 - `keyforge-sci-fi-console` — Sci-Fi Console, version `1.0.0`
 
-Each archive contains:
+Each of the sixteen procedural archives contains:
 - `manifest.json`
 - `sounds/backspace-01.wav`
 - `sounds/enter-01.wav`
@@ -84,4 +147,10 @@ cee44f826e655470e340e3054603a11aa8ea6c087f4524ac4746da581bc251f8  keyforge-sci-f
 add443b9e681d925860976b1ac1e2be98f0c1861adcedd309deef4b18f330fda  keyforge-soft-linear.zip
 e40da6f1fb000ee2e777a707e2562aed0d10d4d11c5adea38ccd073f7ce6388c  keyforge-soft-office.zip
 c115c3c38336a5b899799968ce5c07c06eb369404b32eaa9dd9c8417966beade  keyforge-vintage-typewriter.zip
+840b5d2234ba7f191b4e2268859ae29370e41029120929ee4fd80ae417c0d536  keyforge-switch-clicky.zip
+d007b72f1a15dfb1efc14a7ddef00fc4367492252418cc1f5639d3e7e8f1389c  keyforge-switch-linear.zip
+025cb9c9e03862ba28220498d4a755f8096ab39c738ae8aa483351e2a5a252fe  keyforge-switch-tactile.zip
+45c9d2bfce320d4f882f4d7780c8f8c5681a13dccc0220070845992ec255f79e  keyforge-playful-boing.zip
+acf01d44efe22e7908d135018357f2e75365fe7162a05a5600f4251b2636d4fd  keyforge-playful-bubble.zip
+cf344d1824adee10f278847ea7093b1a704373cb39067ddc1f4bb98f34f6e388  keyforge-playful-duck.zip
 ```
