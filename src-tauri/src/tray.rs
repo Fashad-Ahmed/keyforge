@@ -71,6 +71,10 @@ impl TrayTarget for AppTrayTarget<'_> {
     }
 
     fn show(&self) {
+        #[cfg(target_os = "macos")]
+        crate::commands::panel::show_manage(self.app);
+
+        #[cfg(not(target_os = "macos"))]
         if let Some(window) = self.app.get_webview_window("main") {
             let _ = window.show();
             let _ = window.unminimize();
@@ -124,6 +128,23 @@ pub(crate) fn install(app: &AppHandle) -> tauri::Result<()> {
             };
             dispatch_action(&AppTrayTarget { app }, action);
         });
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+        builder = builder
+            .show_menu_on_left_click(false)
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    rect,
+                    ..
+                } = event
+                {
+                    crate::commands::panel::handle_tray_click(tray.app_handle(), rect);
+                }
+            });
+    }
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
