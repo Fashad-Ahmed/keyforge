@@ -1,7 +1,7 @@
 # KeyForge macOS Menu-Bar-First Experience
 
 **Date:** 2026-09-22
-**Status:** Draft for user review
+**Status:** Approved for implementation planning
 **Scope:** macOS control-surface redesign only
 
 ## Intent
