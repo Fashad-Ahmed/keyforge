@@ -2,6 +2,7 @@ pub mod audio;
 mod commands;
 pub mod input;
 pub mod pack;
+mod panel;
 mod runtime;
 #[allow(dead_code)]
 mod settings;
