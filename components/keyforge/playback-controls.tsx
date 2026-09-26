@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 type PlaybackControlsProps = {
+  className?: string;
   enabled: boolean;
   enabledPending: boolean;
   volumePending: boolean;
@@ -9,7 +10,7 @@ type PlaybackControlsProps = {
   onVolumeChange: (volume: number) => void;
 };
 
-export function PlaybackControls({ enabled, enabledPending, volume, volumePending, onEnabledChange, onVolumeChange }: PlaybackControlsProps) {
+export function PlaybackControls({ className, enabled, enabledPending, volume, volumePending, onEnabledChange, onVolumeChange }: PlaybackControlsProps) {
   const [draftVolume, setDraftVolume] = useState(volume);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -18,9 +19,10 @@ export function PlaybackControls({ enabled, enabledPending, volume, volumePendin
   useEffect(() => () => {
     if (commitTimer.current) clearTimeout(commitTimer.current);
   }, []);
-  const percentage = Math.round(draftVolume * 100);
+  const sliderValue = Math.round(draftVolume * 1000);
+  const percentage = draftVolume * 100;
   return (
-    <section className="controls-panel" aria-labelledby="controls-title">
+    <section className={className ? `controls-panel ${className}` : "controls-panel"} aria-labelledby="controls-title">
       <div className="control-heading">
         <div><p className="eyebrow">Engine</p><h2 id="controls-title">{enabled ? "Running" : "Paused"}</h2></div>
         <label className="toggle-control">
@@ -29,13 +31,13 @@ export function PlaybackControls({ enabled, enabledPending, volume, volumePendin
         </label>
       </div>
       <div className="volume-control">
-        <div className="volume-label"><label htmlFor="master-volume">Output</label><output htmlFor="master-volume">{percentage}</output></div>
-        <input aria-busy={volumePending} aria-label="Volume" id="master-volume" max="100" min="0" onChange={(event) => {
-          const nextVolume = Number(event.currentTarget.value) / 100;
+        <div className="volume-label"><label htmlFor="master-volume">Output</label><output htmlFor="master-volume">{Math.round(percentage)}</output></div>
+        <input aria-busy={volumePending} aria-label="Volume" id="master-volume" max="1000" min="0" onChange={(event) => {
+          const nextVolume = Number(event.currentTarget.value) / 1000;
           setDraftVolume(nextVolume);
           if (commitTimer.current) clearTimeout(commitTimer.current);
           commitTimer.current = setTimeout(() => onVolumeChange(nextVolume), 90);
-        }} style={{ "--volume": `${percentage}%` } as CSSProperties} type="range" value={percentage} />
+        }} step="1" style={{ "--volume": `${percentage}%` } as CSSProperties} type="range" value={sliderValue} />
       </div>
     </section>
   );

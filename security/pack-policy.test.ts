@@ -60,6 +60,7 @@ const EXPECTED_HANDLER_ALLOWLIST = [
   "commands::runtime::set_master_volume",
   "commands::runtime::import_sound_pack",
   "commands::runtime::select_sound_pack",
+  "commands::panel::set_panel_presentation",
 ].join(",");
 
 function hasModulePathOverride(source: string): boolean {

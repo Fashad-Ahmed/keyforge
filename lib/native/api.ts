@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo } from "@/lib/types/app-info";
 import type { ImportOutcome, RuntimeStatus } from "@/lib/types/runtime";
 
+export type PanelPresentationRequest = "controls" | "manage" | "dismiss";
+
 export async function getAppInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("get_app_info");
 }
@@ -25,4 +27,8 @@ export async function importSoundPack(): Promise<ImportOutcome> {
 
 export async function selectSoundPack(packId: string): Promise<RuntimeStatus> {
   return invoke<RuntimeStatus>("select_sound_pack", { packId });
+}
+
+export async function setPanelPresentation(request: PanelPresentationRequest): Promise<void> {
+  return invoke<void>("set_panel_presentation", { request });
 }

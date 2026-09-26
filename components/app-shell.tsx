@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ActiveProfile } from "@/components/keyforge/active-profile";
+import { CompactControls } from "@/components/keyforge/compact-controls";
 import { OperationMessage } from "@/components/keyforge/operation-message";
 import { PackLibrary } from "@/components/keyforge/pack-library";
 import { PlaybackControls } from "@/components/keyforge/playback-controls";
@@ -12,6 +13,7 @@ import {
   getRuntimeStatus,
   importSoundPack,
   selectSoundPack,
+  setPanelPresentation,
   setMasterVolume,
   setSoundEnabled,
 } from "@/lib/native/api";
@@ -40,12 +42,21 @@ export function AppShell() {
   const [soundRuntime, setSoundRuntime] = useState<SoundRuntime>({ state: "connecting" });
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [message, setMessage] = useState<Message>(null);
+  const [presentation, setPresentation] = useState<"controls" | "manage">("controls");
 
   useEffect(() => {
     let isMounted = true;
     void getAppInfo().then(
-      (info) => isMounted && setRuntime({ state: "ready", info }),
-      () => isMounted && setRuntime({ state: "unavailable" }),
+      (info) => {
+        if (!isMounted) return;
+        setRuntime({ state: "ready", info });
+        setPresentation(info.platform === "macos" && window.innerWidth < 500 ? "controls" : "manage");
+      },
+      () => {
+        if (!isMounted) return;
+        setRuntime({ state: "unavailable" });
+        setPresentation("manage");
+      },
     );
     void getRuntimeStatus().then(
       (status) => isMounted && setSoundRuntime({ state: "ready", status }),
@@ -53,6 +64,37 @@ export function AppShell() {
     );
     return () => { isMounted = false; };
   }, []);
+
+  const isMacOS = runtime.state === "ready" && runtime.info.platform === "macos";
+
+  useEffect(() => {
+    if (!isMacOS) return;
+    const syncPresentationToNativeSize = () => {
+      setPresentation(window.innerWidth < 500 ? "controls" : "manage");
+    };
+    window.addEventListener("resize", syncPresentationToNativeSize);
+    return () => window.removeEventListener("resize", syncPresentationToNativeSize);
+  }, [isMacOS]);
+
+  const changePanelPresentation = useCallback(async (request: "controls" | "manage" | "dismiss") => {
+    try {
+      await setPanelPresentation(request);
+      if (request !== "dismiss") setPresentation(request);
+    } catch {
+      setMessage({ kind: "error", text: "The control panel could not be changed. The current view remains open." });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isMacOS || presentation !== "controls") return;
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      void changePanelPresentation("dismiss");
+    };
+    window.addEventListener("keydown", dismissOnEscape);
+    return () => window.removeEventListener("keydown", dismissOnEscape);
+  }, [changePanelPresentation, isMacOS, presentation]);
 
   const soundStatus = soundRuntime.state === "ready" ? soundRuntime.status : undefined;
   const visiblePacks = soundStatus && soundStatus.packs.length > 0
@@ -66,6 +108,21 @@ export function AppShell() {
           name: soundStatus.packName,
         }]
       : [];
+
+  if (isMacOS && presentation === "controls") {
+    return (
+      <CompactControls
+        onEnabledChange={(enabled) => void updateEnabled(enabled)}
+        onManageSounds={() => void changePanelPresentation("manage")}
+        onSelectPack={(packId) => void selectPack(packId)}
+        onVolumeChange={(volume) => void updateVolume(volume)}
+        message={message}
+        packs={visiblePacks}
+        pendingAction={pendingAction}
+        status={soundStatus}
+      />
+    );
+  }
 
   async function updateEnabled(enabled: boolean) {
     setPendingAction("enabled");
@@ -128,8 +185,14 @@ export function AppShell() {
           nativeUnavailable={runtime.state === "unavailable"}
         />
         {soundStatus ? (
-          <div className="instrument-body">
-            <div className="primary-grid">
+        <div className="instrument-body">
+          {isMacOS ? (
+            <div className="manager-toolbar">
+              <span>Sound library</span>
+              <button onClick={() => void changePanelPresentation("controls")} type="button">Back to controls</button>
+            </div>
+          ) : null}
+          <div className="primary-grid">
               <div>
                 <ActiveProfile audioStatus={soundStatus.audioStatus} groupCounts={soundStatus.groupCounts} packName={soundStatus.packName} />
                 <span className="input-detail">Input: {soundStatus.inputStatus}</span>
