@@ -95,3 +95,13 @@ it("starts hidden in a compact macOS panel layout", () => {
     }),
   ]);
 });
+
+it("keeps macOS-only panel implementation details cfg-gated", () => {
+  const panelCommand = readFileSync("src-tauri/src/commands/panel.rs", "utf8");
+  const library = readFileSync("src-tauri/src/lib.rs", "utf8");
+  const tray = readFileSync("src-tauri/src/tray.rs", "utf8");
+
+  expect(panelCommand).toMatch(/#\[cfg\(target_os = "macos"\)\]\s+use crate::panel::\{/u);
+  expect(library).toMatch(/#\[cfg_attr\(not\(target_os = "macos"\), allow\(dead_code\)\)\]\s+mod panel;/u);
+  expect(tray).not.toMatch(/let\s+mut\s+builder\s*=\s*TrayIconBuilder/u);
+});

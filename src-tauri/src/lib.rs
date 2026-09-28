@@ -2,6 +2,7 @@ pub mod audio;
 mod commands;
 pub mod input;
 pub mod pack;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod panel;
 mod runtime;
 #[allow(dead_code)]

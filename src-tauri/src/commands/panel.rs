@@ -1,10 +1,12 @@
 use std::sync::Mutex;
 
 pub(crate) use crate::panel::PanelCommandError;
+#[cfg(target_os = "macos")]
 use crate::panel::{
     dispatch_panel_request, on_focus_lost, panel_origin, toggle_panel, PanelAnchor, PanelHost,
-    PanelRequest, PanelSize, PanelState, PanelView, ScreenRect,
+    PanelSize, PanelView, ScreenRect,
 };
+use crate::panel::{PanelRequest, PanelState};
 
 #[tauri::command]
 pub(crate) fn set_panel_presentation(
