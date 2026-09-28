@@ -2,14 +2,14 @@
 
 KeyForge is a free, open-source, privacy-first keyboard sound engine for macOS, Windows, and Linux.
 
-This repository currently contains Milestone 6: a secure Tauri 2 desktop foundation, a statically exported Next.js presentation layer, a native Rust audio engine, validated local sound-pack import, persistent controls, a product interface, and close-to-tray operation. macOS local key-sound playback is available; Windows and Linux input adapters remain explicitly unsupported.
+This repository currently contains Milestone 7: a secure Tauri 2 desktop foundation, a statically exported Next.js presentation layer, a native Rust audio engine, validated local sound-pack import, persistent controls, and a macOS menu-bar-first control surface. macOS local key-sound playback is available; Windows and Linux input adapters remain explicitly unsupported.
 
 ## Architecture
 
 - Next.js and TypeScript render the interface as static files in `out/`.
 - Tauri loads those files directly; there is no production Next.js server.
 - Native functionality belongs in Rust and crosses IPC only through explicitly registered commands.
-- Custom commands are limited to reviewed coarse status and control IPC: `get_app_info`, `get_runtime_status`, `set_sound_enabled`, `set_master_volume`, `import_sound_pack`, and `select_sound_pack`.
+- Custom commands are limited to reviewed coarse status and control IPC: `get_app_info`, `get_runtime_status`, `set_sound_enabled`, `set_master_volume`, `import_sound_pack`, `select_sound_pack`, and the presentation-only `set_panel_presentation` command.
 - The main window has no built-in Tauri core permissions.
 - The audio engine accepts validated, decoded PCM only; encoded audio bytes and file paths are outside its boundary.
 - Its fixed mixer supports 32 simultaneous voices. Sound enabled, master volume, and selected pack ID are the only persisted product settings.
@@ -21,7 +21,8 @@ This repository currently contains Milestone 6: a secure Tauri 2 desktop foundat
 - Installed audio is rewritten as canonical signed-16 PCM WAV; the audio registry receives decoded PCM only.
 - Import uses a Rust-only native file picker. The selected filesystem path stays in Rust and never crosses IPC.
 - Pack changes use prepare-then-commit activation: complete decode and registration precede one authoritative runtime swap, so a failed activation leaves the current sound active.
-- Closing the main window uses close-to-tray behavior. The native tray can enable or disable sounds, show KeyForge, or quit.
+- On macOS, clicking the menu-bar icon opens compact controls; the full library and pack import are available from **Manage sounds**. Dismissing or closing the panel leaves playback running. The native tray menu retains enable/disable, Show KeyForge, and explicit Quit actions.
+- Windows and Linux retain the ordinary application window and existing tray behavior; the macOS compact-panel interaction is not claimed for those platforms.
 - IPC errors are sanitized failures with stable variants rather than filesystem paths, decoder details, or operating-system errors.
 - There is no application networking. Autostart, networking, updates, and Windows/Linux input hooks remain excluded.
 - The application contains no telemetry, analytics, accounts, or runtime networking.

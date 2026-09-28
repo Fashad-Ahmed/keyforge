@@ -34,6 +34,6 @@ Sound enabled, master volume, and selected pack ID are the only persisted produc
 
 Pack import begins in a Rust-only native file picker. Paths, archive entries, audio bytes, decoded samples, and internal errors never cross IPC. Prepare-then-commit activation validates, decodes, and registers a full pack before changing the active selector. Sanitized failures preserve the currently active sound.
 
-Close-to-tray behavior is owned by Rust. The tray exposes only Enable or Disable Sounds, Show KeyForge, and Quit; it does not broaden frontend permissions. The main capability allowlist remains empty.
+Window and tray lifecycle is owned by Rust. On macOS, dismissing or closing compact controls hides the panel without stopping playback; the native tray exposes Enable or Disable Sounds, Show KeyForge, and explicit Quit. Windows and Linux retain their ordinary window/tray behavior. The presentation-only `set_panel_presentation` IPC accepts only `controls`, `manage`, or `dismiss`; it carries no keyboard data, filesystem path, or audio data and does not mutate playback settings. It does not broaden frontend permissions. The main capability allowlist remains empty.
 
 There is no application networking. Autostart, networking, updates, and Windows/Linux input hooks remain excluded.

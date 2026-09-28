@@ -16,7 +16,7 @@ Only explicit Tauri commands and non-sensitive state may cross IPC.
 
 Raw keyboard events, key history, and typed content must never cross this boundary.
 
-The reviewed product snapshot contains coarse engine status, validated volume and enabled state, active pack identity, group counts, and sanitized pack summaries. Import uses a Rust-only native file picker, so paths never enter command arguments or responses. Commands return sanitized failures without IO, decoder, device, or path details. The frontend has no Tauri capabilities and no browser networking or persistence.
+The reviewed product snapshot contains coarse engine status, validated volume and enabled state, active pack identity, group counts, and sanitized pack summaries. Import uses a Rust-only native file picker, so paths never enter command arguments or responses. Commands return sanitized failures without IO, decoder, device, or path details. The presentation-only `set_panel_presentation` command accepts only the closed values `controls`, `manage`, or `dismiss`; it carries no keyboard events, key codes, typed content, paths, or audio data and cannot mutate playback settings. The frontend has no Tauri capabilities and no browser networking or persistence.
 
 ## Boundary 4: Sound-Pack Files → Pack Manager
 
@@ -40,7 +40,7 @@ Sound enabled, master volume, and selected pack ID are the complete persisted se
 
 ## Boundary 7: Window and Tray → Rust Runtime
 
-Close-to-tray interception, show, native sound enable or disable, and explicit quit remain native operations. The tray calls the same authoritative runtime mutation used by IPC. A tray construction failure degrades to ordinary window close behavior instead of trapping the application.
+On macOS, the tray opens a compact presentation of the existing WebView; Manage sounds switches that same window to the existing library/import presentation. Rust owns window size, position, visibility, focus dismissal, native tray actions, and explicit quit. Dismissing or closing the compact panel hides it without stopping playback. The presentation IPC can request only controls/manage/dismiss and cannot alter runtime settings. Windows and Linux retain ordinary window/tray behavior. The tray calls the same authoritative runtime mutation used by IPC. A tray construction failure degrades to an ordinary recoverable window instead of trapping the application.
 
 ## Boundary 8: Build System → Release Artifact
 
