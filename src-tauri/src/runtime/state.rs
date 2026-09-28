@@ -95,19 +95,19 @@ impl RuntimeSnapshot {
     pub(crate) fn for_test() -> Self {
         Self::new(
             RuntimeAudioStatus::Ready,
-            RuntimeGroupCounts::new(3, 1, 1, 1, 1),
+            RuntimeGroupCounts::new(1, 1, 1, 1, 1),
             RuntimeInputStatus::Ready,
-            "keyforge-mechanical".to_string(),
-            "KeyForge Mechanical".to_string(),
+            "keyforge-switch-linear".to_string(),
+            "Linear Switch (Keychron K10)".to_string(),
             true,
             ValidatedVolume::new(1.0).unwrap(),
         )
         .with_packs(vec![PackSummary::new(
-            "keyforge-mechanical",
-            "KeyForge Mechanical",
+            "keyforge-switch-linear",
+            "Linear Switch (Keychron K10)",
             true,
             true,
-            RuntimeGroupCounts::new(3, 1, 1, 1, 1),
+            RuntimeGroupCounts::new(1, 1, 1, 1, 1),
         )])
     }
 }

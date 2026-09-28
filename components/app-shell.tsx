@@ -17,6 +17,7 @@ import {
   setMasterVolume,
   setSoundEnabled,
 } from "@/lib/native/api";
+import { isBundledPackId } from "@/lib/sound-collections";
 import type { AppInfo } from "@/lib/types/app-info";
 import type { RuntimeStatus } from "@/lib/types/runtime";
 
@@ -29,13 +30,6 @@ type SoundRuntime =
   | { state: "ready"; status: RuntimeStatus }
   | { state: "unavailable" };
 type Message = { kind: "error" | "success"; text: string } | null;
-
-const BUNDLED_PACK_IDS = new Set([
-  "keyforge-mechanical",
-  "keyforge-deep-thock",
-  "keyforge-crisp-click",
-  "keyforge-soft-linear",
-]);
 
 export function AppShell() {
   const [runtime, setRuntime] = useState<NativeRuntime>({ state: "connecting" });
@@ -102,7 +96,7 @@ export function AppShell() {
     : soundStatus
       ? [{
           active: true,
-          bundled: BUNDLED_PACK_IDS.has(soundStatus.packId),
+          bundled: isBundledPackId(soundStatus.packId),
           groupCounts: soundStatus.groupCounts,
           id: soundStatus.packId,
           name: soundStatus.packName,
