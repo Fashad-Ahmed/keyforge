@@ -11,6 +11,7 @@ const EXPECTED_HANDLERS = [
   "commands::runtime::set_master_volume",
   "commands::runtime::import_sound_pack",
   "commands::runtime::select_sound_pack",
+  "commands::panel::set_panel_presentation",
 ].join(",");
 
 it("keeps product IPC and capabilities exact", () => {
@@ -77,17 +78,30 @@ it("documents product settings, import, activation, and tray boundaries", () => 
   }
 });
 
-it("uses a focused product window that can resize to a compact layout", () => {
+it("starts hidden in a compact macOS panel layout", () => {
   const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")) as {
     app: { windows: Array<Record<string, unknown>> };
   };
 
   expect(config.app.windows).toEqual([
     expect.objectContaining({
-      height: 800,
-      minHeight: 520,
+      decorations: false,
+      height: 420,
+      minHeight: 420,
       minWidth: 360,
-      width: 760,
+      resizable: false,
+      visible: false,
+      width: 360,
     }),
   ]);
+});
+
+it("keeps macOS-only panel implementation details cfg-gated", () => {
+  const panelCommand = readFileSync("src-tauri/src/commands/panel.rs", "utf8");
+  const library = readFileSync("src-tauri/src/lib.rs", "utf8");
+  const tray = readFileSync("src-tauri/src/tray.rs", "utf8");
+
+  expect(panelCommand).toMatch(/#\[cfg\(target_os = "macos"\)\]\s+use crate::panel::\{/u);
+  expect(library).toMatch(/#\[cfg_attr\(not\(target_os = "macos"\), allow\(dead_code\)\)\]\s+mod panel;/u);
+  expect(tray).not.toMatch(/let\s+mut\s+builder\s*=\s*TrayIconBuilder/u);
 });

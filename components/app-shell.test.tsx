@@ -8,6 +8,7 @@ const {
   getRuntimeStatusMock,
   importSoundPackMock,
   selectSoundPackMock,
+  setPanelPresentationMock,
   setMasterVolumeMock,
   setSoundEnabledMock,
 } = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const {
   getRuntimeStatusMock: vi.fn(),
   importSoundPackMock: vi.fn(),
   selectSoundPackMock: vi.fn(),
+  setPanelPresentationMock: vi.fn(),
   setMasterVolumeMock: vi.fn(),
   setSoundEnabledMock: vi.fn(),
 }));
@@ -24,6 +26,7 @@ vi.mock("@/lib/native/api", () => ({
   getRuntimeStatus: getRuntimeStatusMock,
   importSoundPack: importSoundPackMock,
   selectSoundPack: selectSoundPackMock,
+  setPanelPresentation: setPanelPresentationMock,
   setMasterVolume: setMasterVolumeMock,
   setSoundEnabled: setSoundEnabledMock,
 }));
@@ -32,8 +35,9 @@ beforeEach(() => {
   getAppInfoMock.mockReset().mockResolvedValue({
     name: "KeyForge",
     version: "0.1.0",
-    platform: "macos",
+    platform: "windows",
   });
+  setPanelPresentationMock.mockReset().mockResolvedValue(undefined);
   getRuntimeStatusMock.mockReset().mockResolvedValue({
     audioStatus: "ready",
     groupCounts: {
@@ -136,7 +140,7 @@ it("renders native runtime information", async () => {
     screen.getByRole("heading", { level: 1, name: "KeyForge" }),
   ).toBeInTheDocument();
   expect(await screen.findByText("Version: 0.1.0")).toBeInTheDocument();
-  expect(screen.getByText("Platform: macos")).toBeInTheDocument();
+  expect(screen.getByText("Platform: windows")).toBeInTheDocument();
   expect(await screen.findByText("Audio: ready")).toBeInTheDocument();
   expect(screen.getByText("Input: ready")).toBeInTheDocument();
   expect(screen.getByText("Pack: KeyForge Mechanical")).toBeInTheDocument();
@@ -169,7 +173,7 @@ it("updates master volume through the native runtime", async () => {
   render(<AppShell />);
 
   const slider = await screen.findByRole("slider", { name: "Volume" });
-  fireEvent.change(slider, { target: { value: "25" } });
+  fireEvent.change(slider, { target: { value: "250" } });
 
   await waitFor(() => expect(setMasterVolumeMock).toHaveBeenCalledWith(0.25));
 });
@@ -236,11 +240,23 @@ it("moves the volume slider immediately while native persistence is pending", as
   render(<AppShell />);
 
   const slider = await screen.findByRole("slider", { name: "Volume" });
-  fireEvent.change(slider, { target: { value: "37" } });
+  fireEvent.change(slider, { target: { value: "370" } });
 
-  expect(slider).toHaveValue("37");
+  expect(slider).toHaveValue("370");
   expect(slider).toBeEnabled();
   await waitFor(() => expect(setMasterVolumeMock).toHaveBeenCalledWith(0.37));
+});
+
+it("supports fine-grained volume changes without visible integer stepping", async () => {
+  render(<AppShell />);
+
+  const slider = await screen.findByRole("slider", { name: "Volume" });
+  expect(slider).toHaveAttribute("max", "1000");
+  expect(slider).toHaveAttribute("step", "1");
+  fireEvent.change(slider, { target: { value: "375" } });
+
+  expect(slider).toHaveValue("375");
+  await waitFor(() => expect(setMasterVolumeMock).toHaveBeenCalledWith(0.375));
 });
 
 it("keeps the active instrument visible when catalog discovery is unavailable", async () => {
@@ -274,4 +290,61 @@ it("identifies every built-in profile when catalog discovery is unavailable", as
   render(<AppShell />);
 
   expect(await screen.findByText("3 voices · Included")).toBeInTheDocument();
+});
+
+function setMacWindowWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width, writable: true });
+  getAppInfoMock.mockResolvedValue({ name: "KeyForge", version: "0.1.0", platform: "macos" });
+}
+
+it("starts macOS in compact controls and opens the existing manager on demand", async () => {
+  setMacWindowWidth(360);
+  render(<AppShell />);
+
+  expect(await screen.findByRole("button", { name: "Manage sounds" })).toBeInTheDocument();
+  expect(screen.getByRole("slider", { name: "Volume" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Installed instruments" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Manage sounds" }));
+  expect(setPanelPresentationMock).toHaveBeenCalledWith("manage");
+  expect(await screen.findByRole("heading", { name: "Installed instruments" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Back to controls" }));
+  expect(setPanelPresentationMock).toHaveBeenLastCalledWith("controls");
+  expect(await screen.findByRole("button", { name: "Manage sounds" })).toBeInTheDocument();
+});
+
+it("maps only Escape to compact dismissal and keeps the current view on native failure", async () => {
+  setMacWindowWidth(360);
+  render(<AppShell />);
+
+  await screen.findByRole("button", { name: "Manage sounds" });
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(setPanelPresentationMock).not.toHaveBeenCalled();
+
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(setPanelPresentationMock).toHaveBeenCalledWith("dismiss");
+  await Promise.resolve();
+
+  setPanelPresentationMock.mockRejectedValueOnce(new Error("/private/native/path"));
+  fireEvent.click(screen.getByRole("button", { name: "Manage sounds" }));
+  expect(await screen.findByText("The control panel could not be changed. The current view remains open.")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Installed instruments" })).not.toBeInTheDocument();
+});
+
+it("recognizes the native manager size change on macOS", async () => {
+  setMacWindowWidth(360);
+  render(<AppShell />);
+  await screen.findByRole("button", { name: "Manage sounds" });
+
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 760, writable: true });
+  fireEvent(window, new Event("resize"));
+  expect(await screen.findByRole("heading", { name: "Installed instruments" })).toBeInTheDocument();
+});
+
+it("keeps the standard sound-library window on non-macOS platforms", async () => {
+  render(<AppShell />);
+  expect(await screen.findByRole("heading", { name: "Installed instruments" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Back to controls" })).not.toBeInTheDocument();
+  expect(setPanelPresentationMock).not.toHaveBeenCalled();
 });

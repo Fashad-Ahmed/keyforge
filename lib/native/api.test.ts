@@ -104,3 +104,27 @@ describe("runtime controls", () => {
     });
   });
 });
+
+describe("panel presentation", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("requests only the named manager presentation", async () => {
+    const { setPanelPresentation } = await import("./api");
+
+    await setPanelPresentation("manage");
+
+    expect(invokeMock).toHaveBeenCalledOnce();
+    expect(invokeMock).toHaveBeenCalledWith("set_panel_presentation", {
+      request: "manage",
+    });
+  });
+
+  it("preserves native presentation failures for sanitized UI handling", async () => {
+    invokeMock.mockRejectedValue(new Error("native path detail"));
+    const { setPanelPresentation } = await import("./api");
+
+    await expect(setPanelPresentation("dismiss")).rejects.toThrow("native path detail");
+  });
+});
